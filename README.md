@@ -1,5 +1,5 @@
 # Capstone2_Harvard_edX
-In partial fulfillment of the requirements for the Harvard edX: Data Science Professional Certificate, this repository contains the following files:
+In partial fulfillment of the requirements for the [Harvard edX: Data Science Professional Certificate](https://www.edx.org/professional-certificate/harvardx-data-science), this repository contains the following files:
 * Capstone_Two_Report_Haslam_2019_03_12.Rmd
 * Capstone_Two_Script.r
 * Capstone_Two_Report_Haslam_2019_03_12.pdf
