@@ -1,0 +1,1660 @@
+---
+title: "Capstone Two: 21 models tested on the WDBC data"
+author: "Thomas J. Haslam"
+date: "March 12, 2019"
+output:
+  html_document:
+    pandoc_args: --number-sections
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.fullwidth = TRUE, fig.align = "center")
+```
+
+# Overview
+This project uses the well-known Breast Cancer Wisconsin (Diagnostic) Data Set ([WDBC](https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Diagnostic))), available from the [UCI Machine Learning Repository](http://archive.ics.uci.edu/ml/index.php), Center for Machine Learning and Intelligent Systems, University of California, Irvine.[^1] 
+```{r lib_data}
+library(tidyverse)
+library(caret)
+library(readr)
+library(matrixStats)
+options(scipen = 999)
+
+library(cluster)
+library(fpc)
+```
+
+## Data Set Characteristics  
+The data set is multivariate, consisting of 569 observations with 32 attributes (variables), with no missing values. It generally conforms to the [tidy format](https://en.wikipedia.org/wiki/Tidy_data):
+each variable, a column; each observation, a row; each type of observational unit, a table.[^2]
+
+```{r Data_Wrangle}
+
+# Data Import & Wrangle(1)
+
+# First Problem: Set Data Variable Ids (column names) deriveed from wdbc.names.txt
+name_cols <- c("id","diagnosis","radius_mean","texture_mean",
+               "perimeter_mean","area_mean","smoothness_mean",
+               "compactness_mean","concavity_mean","concave_points_mean",
+               "symmetry_mean","fractal_dimension_mean","radius_se","texture_se",
+               "perimeter_se","area_se","smoothness_se","compactness_se",
+               "concavity_se","concave_points_se","symmetry_se","fractal_dimension_se",
+               "radius_worst","texture_worst","perimeter_worst",
+               "area_worst","smoothness_worst","compactness_worst",
+               "concavity_worst","concave_points_worst","symmetry_worst",
+               "fractal_dimension_worst")
+
+# Read in UIC data with column names
+csv_url <-  "https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.data"
+
+wdbc_data <- read_csv(csv_url, col_names = name_cols)
+
+# as.factor and set levels
+wdbc_data <- mutate_if(wdbc_data, is.character, as.factor) %>% 
+  mutate_at("diagnosis", factor, levels = c("M", "B")) # Set malignant as POSITIVE
+
+## EDA Jazz
+wdbc_mx <- as.matrix(wdbc_data[, 3:32]) # remove id & diagnosis
+# Set the row names 
+row.names(wdbc_mx) <- wdbc_data$id
+
+# Recapture as df using Tidyverse
+tidy_2 <- bind_cols(enframe(names(wdbc_data[, 3:32]), 
+                            name = NULL, value = "Variable"),
+                    enframe(colMeans2(wdbc_mx), 
+                            name = NULL, value = "Avg") ,
+                    enframe(colSds(wdbc_mx), 
+                            name = NULL, value = "SD"),
+                    enframe(colMins(wdbc_mx), 
+                            name = NULL, value = "Min"),
+                    enframe(colMaxs(wdbc_mx), 
+                            name = NULL, value = "Max"),
+                    enframe(colMedians(wdbc_mx), 
+                            name = NULL, value = "Median"))
+
+
+true_values <-  as.factor(wdbc_data$diagnosis) %>% 
+  relevel("M") %>% set_names(wdbc_data$id) # Set malignant as POSITIVE
+```
+
+The first two variables are the ID number and  Diagnosis ("M"" = malignant, "B" = benign).  The next 30 variables describe ten features of each cell nucleus examined: radius, texture, perimeter, area, smoothness, compactness, concavity, concave points, symmetry, fractal dimension.  Since the overall concern is predicting whether a cell is malignant or benign, the primary ML task is classification.  Of the 569 observations, for the true values the class distribution is 357 benign ("B"), 212 malignant ("M").[^3]
+```{r EDA_start}
+set.seed(2019)
+unscaled_K <- kmeans(wdbc_mx, centers = 2, nstart = 20)
+
+wdbc_mx_sc <- scale(sweep(wdbc_mx, 2, colMeans(wdbc_mx))) # center & scale
+# sweep allows for centering (and scaling) with arbitrary statistics.
+# but `scale(wdbc_mx, center = TRUE)` would work just as well in this case
+
+set.seed(2019)
+scaled_K <- kmeans(wdbc_mx_sc, centers = 2, nstart = 20)
+
+unscaled_k_pred <- if_else(unscaled_K$cluster == 1, "M", "B") %>% 
+  as.factor() %>% relevel("M") %>% set_names(wdbc_data$id)
+
+scaled_k_pred <- if_else(scaled_K$cluster == 1, "B", "M") %>% 
+  as.factor() %>% relevel("M") %>% set_names(wdbc_data$id)
+
+
+ID_check <- rbind(
+  rbind("True_Values" = true_values[90:97]), 
+  rbind("Unscaled_K" = unscaled_k_pred[90:97]),
+  rbind("Scaled_K" = scaled_k_pred[90:97])  
+  ) 
+
+cfm_unscaled_k <- confusionMatrix(unscaled_k_pred, true_values)
+cfm_scaled_k  <- confusionMatrix(scaled_k_pred, true_values)
+
+# key values as table output
+key_values_K_cluster <- bind_cols( 
+  enframe(cfm_unscaled_k$overall["Accuracy"], name = NULL, value = "unK_Acc" ),
+  enframe(cfm_unscaled_k$byClass["F1"], name = NULL, value = "unK_F1" ) ,
+  enframe(cfm_scaled_k$overall["Accuracy"], name = NULL, value = "scalK_Acc " ),
+  enframe(cfm_scaled_k$byClass["F1"], name = NULL, value = "scalK_F1" ) ) %>%  
+  knitr::kable(caption = "Unscaled and Scaled K: Accuracy and F Measure results")
+
+
+dirty_comp_table <- cbind(cbind(TrV = table(true_values)), 
+      cfm_unscaled_k$table, 
+      cfm_scaled_k$table) %>% 
+  knitr::kable(caption = "L-R: True Values, Unscaled K, Scaled K" )
+
+diagno <- as.numeric(wdbc_data$diagnosis == "M") # for plotting
+wdbc_PCA <- prcomp(wdbc_mx, center = TRUE, scale = TRUE) 
+
+importance_df <- data.frame(Sum_Exp = summary(wdbc_PCA)$importance[3,]) %>%
+  rownames_to_column("PCA") # Cumulative Proportion
+
+PCA_sum <- summary(wdbc_PCA) # PCA list: SD, Prop Var., Cum Prop.
+# PCA_sum$importance[3,] == summary(wdbc_PCA)$importance[3,]
+
+plot_PCA1_2 <- data.frame(PC1 = wdbc_PCA$x[,1], PC2 = wdbc_PCA$x[,2],
+                          label = factor(wdbc_data$diagnosis )) %>%
+  ggplot(aes(PC1, PC2, fill = label)) +
+  geom_point(cex = 3, pch = 21) +
+  labs(fill = "Class", title = "True Value Groupings: PC1 / PC2",
+       subtitle = "63% of variance explained") + 
+  theme(legend.position = c(0.88, 0.14))
+
+
+plot_PCA4_5 <- data.frame(PC4 = wdbc_PCA$x[,4], PC5 = wdbc_PCA$x[,5],
+                          label = factor(wdbc_data$diagnosis )) %>%
+  ggplot(aes(PC4, PC5, fill = label)) +
+  geom_point(cex = 3, pch = 21) +
+  labs(fill = "Class", title = "True Value Groupings: PC4 / PC5",
+       subtitle = "12% of variance explained") + 
+  theme(legend.position = c(0.88, 0.14))
+
+
+```
+
+For modelling and evaluation purposes, I have set "M" or the diagnosis of malignant as the positive value, but with `trainControl` for `caret` set as `summaryFunction = twoClassSummary`.  As a result, the accuracy scores will reflect both results for "M" and "B" based on their respective true values, and not the just correct percentage of results for "M".
+
+## Project Goals
+This project uses an ensemble approach to evaluate 21 different ML alogorithms (models) as follows: the models are evaluated for **Accuracy**  and **F Measure** (which considers both precision and recall)[^4] on two different training and test splits, and three different preprocesing routines.
+
+For the train/test splits, the first run: 50/50.  The second: 82/18.  For the three different preprocessing routines, Prep_0 (or NULL) uses no preprocessing.  Prep_1 centers and scales the data.  Prep_2 uses Principal Component Analysis (PCA), after first removing any near-zero-variant values (NZV) and centering and scaling the data.  (In other words, Prep_2 uses a standard stack for the Caret package preProcessing option:  in this case, "`nzv`, `center`, `scale`, `pca`"; likewise common, "`zv`, `center`, `scale`, `pca`").[^5] 
+
+### Research Questions
+In total, each of the 21 models is run 6 times (2 splits; 3 preps each) for a total of 126 prediction/classification results. In evaluating the results, the relevant questions are as follows: Which models perform best overall?  How do the different preprocessing routines affect each model? Which models deal best with limited data (the 50/50 split)?  Which models learn the best (show significant improvement) when given more data (the 82/18 split)?
+
+#### Ensuring Reproducibility 
+To ensure both valid comparisions between models and reproducibility of results, all models (for all runs and all preprocessing routines) share the same `caret` command for `trainControl` as follows:  
+
+```{r example, echo = TRUE, eval = FALSE}
+set.seed(2019)
+seeds <- vector(mode = "list", length =  1000)
+for(i in 1:1000) seeds[[i]] <- sample.int(1000, 800)
+
+###  Does NOT change: same for all models
+myControl <- trainControl(
+  method = "cv", number = 10,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE, # IMPORTANT!
+  verboseIter = FALSE,
+  seeds = seeds
+)   
+```
+
+Please note that when using `caret` training multiple models , the `seeds` option must be set in `trainControl`[^6] to ensure reproducibility of results: it is not enough to `set.seed()` outside of the modelling function.  Otherwise, each time `caret` performs cross validation (or bootstrapping or sampling), it will randomly select different observation rows from the training data. 
+
+### Failure Tables
+Finally, *Failure Tables* were generated for each set of model results.  The relevant questions here are as follows: Where the failures in diagnosis random?   Or, were they specific to certain cell nucleus observerations as determined by the id variable?  If so, were these simply much more challenging for the models in general?  Or, for certain types of models (for example, *linear* vs. *random forest* models)?  Did data preprocessing, or the lack thereof, contribute classification failure on particular observations.
+
+The *Failure Tables* allow us to drill down in much more detail, if needed.  For this project, it might seem overkill.  But in the context of medical research, it can be highly valuable to identify which set of characteristics typically get misdiagnosed.  The *Failure Tables* are a useful step in that direction, and in developing better models or refining existing ones. 
+
+# Methods / Analysis
+The project starts with *EDA*, exploring the data particularly for variance. This will provide insight into what data preprocessing might offer (if anything) for modelling. 
+
+The modelling itself involves supervised learning[^7], testing the results against known true values. But the *EDA* stage makes use of unsupervised learning[^8], particularly cluster analysis, to explore how data processing might affect outcomes. (I learned this approach from Hank Roark's course "Unsupervised Learning in R"[^9] at [DataCamp](https://www.datacamp.com)).
+
+The models are evaluated in terms of their *Accuracy* and *F Measure* scores.  When the only the accuracy results appear in a table, they are ranked in descending order (top to bottom) in accordance with the matching *F Measure* results.
+
+The model selection itself was based largely on what I learned in the *Harvard edX Machine Learning course*[^10], with two algorithms eliminated during the development process: `gam` and `wsrf`. The baseline *Generalized Additive Model*[^11] `gam`, unlike `gamboost` and `gamLoess`, simply took too long to run and returned generally inferior results. The *Weighted Subspace Random Forest for Classification*[^12] `wrfs` also returned consistently inferior results, and I had other more commonly used *random forest*[^13] models as valid alternatives. 
+
+## EDA: Base R, Tidyverse, Unsupervised ML
+*Exploratory Data Analysis* (EDA), obviously, should precede data modelling. If we take the old school approach, we might cast the dataframe `wdbc_data` into a matrix `wdbc_mx` and then check (to start) the mean and sd of each predictor variable with code such as `colMeans2(wdbc_mx) ` or `apply(wdbc_mx, 2, sd)`  This returns useful but messy output as follows:
+
+```{r messy_output, echo = TRUE}
+apply(wdbc_mx, 2, mean) # mean per variable
+```
+
+We see a high degree of variance, which makes a case for centering and scaling the data, as I will demonstrate shortly.  But it also might be better to capture this data as `tidyverse` summary statistics.  The `tidy` output as follows, showing only the first 6 rows for sake of brevity:
+
+```{r tidy_output}
+tidy_2 %>% head() %>%  
+  knitr::kable(caption = "wdbc: Summary Stats [first 6 variables shown] ") 
+```
+
+Moreover, capturing the data makes it easier for us to the summarize the summary stats.
+
+```{r tidy_sum_stats}
+tidy_2 %>% summarize(min_mean = min(Avg), 
+                      max_mean = max(Avg),
+                      avg_mean = mean(Avg),
+                      sd_mean = sd(Avg),
+                      min_sd = min(SD), 
+                      max_sd = max(SD),
+                      avg_sd = mean(SD),
+                      sd_sd = sd(SD)) %>% 
+  knitr::kable(caption = "wdbc: Range of mean & sd values") 
+```
+
+### High Variance: A Case for Centering and Scaling?
+Examining the variance in the data set for all predictor values, we can see the SD of the mean is over 3 times the average of the mean, and the range runs from approximately 0.004 min to 880 max. The SD stats likwise show a considerable range.
+
+To demonstrate how this much variance could affect ML classification, I will use `kmeans` do unsupervised cluster analysis first on the raw data, and then on the centered and scaled data.
+
+### Unsupervised ML Exploration
+In this exercise, we are simply trying to identify distinguishable clusters in the data.  We are not (yet) predicting the classification of "M" (malignant) or "B" (benign). Rather, we want to know what general groupings or patterns occur. I will cheat a little, however, and set the number of clusters to 2.  So the question then becomes which approach, no data preprocessing or centering and scaling the data, brings us closer the to right numbers for each group: 357 "B" (benign) and  212 "M" (malignant).
+
+The results from  `kmeans(wdbc_mx, centers = 2, nstart = 20)` have been saved as `unscaled_K`, plotted as follows:
+
+```{r unscaled_k}
+plotcluster(wdbc_mx, unscaled_K$cluster, main = "Unscaled K Results",
+            ylab = "", xlab = "Cluster 1: 131 assigned; Cluster 2: 438")
+```
+
+Running either `table(unscaled_K$cluster)` or `unscaled_K$size` gives us the breakdown of K1:131; K2: 438. If we assume that the larger cluster 2 is "B" and so cluster 1 "M", an assumption we will test shortly, then `unscaled_K` has failed to idenfity a miminum of 81 malignant cells. This number rises if cluster 2 contains cells that should have been diagnosed as benign but instead were diagnosed as malignant. So our best possible accuracy rate is 0.857645 (488/569).
+
+Let's test whether centering and scaling the data has a meaningful impact on the outcome. For comparison purposes, we will create a second matrix: `wdbc_mx_sc <- scale(sweep(wdbc_mx, 2, colMeans(wdbc_mx)))`.
+
+#### Unprocessed vs. Centered and Scaled
+```{r comparison_un_vs_scaled, echo = FALSE}
+t(wdbc_mx)[1:8, 1:5] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Variable") %>%  
+  knitr::kable(caption = "Raw Data: wdbc_mx: First 8 Vars. for 5 Cases")
+
+t(wdbc_mx_sc)[1:8, 1:5] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Variable") %>%  
+  knitr::kable(caption = "C-S Prep: wdbc_mx_sc: First 8 Vars. for 5 Cases")
+```
+
+With the predictor variable values centered (on zero) and scaled (now measured in SDs from the mean), we will rerun `kmeans` now on `wdbc_mx_sc` and save the results as `scaled_K`.
+
+```{r scaled_K}
+plotcluster(wdbc_mx, scaled_K$cluster, 
+            main = "Centered & Scaled K Results",
+            ylab = "", xlab = "Cluster 1: 380 assigned; Cluster 2: 189")
+```
+
+Running either `table(scaled_K$cluster)` or `scaled_K$size` gives us the breakdown of K1: 380; K2: 189. In contrast to `unscaled_K`, and again an assumption we will test shortly, if we assume that the larger cluster 1 is "B" and so cluster 2 "M", then `scaled_K`  has failed to idenfity a miminum of 23 malignant cells.  So now our best possible accuracy rate is 0.9595782 (546/569), but likely lower.
+
+Time to test our assumptions.
+
+#### Check against true values
+So we will convert our *unsupervised learning* run  into a raw  *supervised learning* attempt.  First, I will establish the vector of true values; second, do a quick check to make sure the matrix id numbers match the true value id numbers; and then finally run a `confusionMatrix` test for the *Accuracy* and *F Measure* scores
+
+```{r assumption_check, eval = FALSE, echo = TRUE}
+true_values <-  as.factor(wdbc_data$diagnosis) %>% 
+  relevel("M") %>% set_names(wdbc_data$id) # Set malignant as POSITIVE
+# Assign clusters to most likely true value classifications
+unscaled_k_pred <- if_else(unscaled_K$cluster == 1, "M", "B") %>% 
+   as.factor() %>% relevel("M") %>% set_names(wdbc_data$id) # match id to index#
+scaled_k_pred <- if_else(scaled_K$cluster == 1, "B", "M") %>% 
+   as.factor() %>% relevel("M") %>% set_names(wdbc_data$id) # match id to index#
+```
+
+The following table results from comparing `true_values[90:97]` , `unscaled_k_pred[90:97]`,  and `scaled_k_pred[90:97]`, making sure we are indeed testing the same id numbers.
+
+```{r matrix_check, echo = FALSE}
+ID_check %>% 
+  knitr::kable(caption = "IDs and Indexs Match: sample[90:97]" )
+```
+
+So far, so good.  The ID numbers match the index order for both K runs, and `scaled_k` appears a bit more accurate than `unscaled_k`. Let's run the `confusionMatrix` for both, check the key results, and wrap up this EDA experiment.
+
+#### confusionMatrix Results
+```{r cfm_for_K_tests}
+bind_cols( 
+enframe(cfm_unscaled_k$overall["Accuracy"], name = NULL, value = "unK_Acc" ),
+enframe(cfm_unscaled_k$byClass["F1"], name = NULL, value = "unK_F1" ) ,
+enframe(cfm_scaled_k$overall["Accuracy"], name = NULL, value = "scalK_Acc " ),
+enframe(cfm_scaled_k$byClass["F1"], name = NULL, value = "scalK_F1" )
+)  %>%  knitr::kable(caption = "Unscaled and Scaled K: Accuracy and F Measure results")
+
+```
+
+By centering and scaling the data, we improved the *Accuracy* by over 5% and the *F Measure* by over 11%. Importantly, in this context, the `scaled_K` model did much better as not mistaking malignant cells for benign: the potentially more dangerous outcome.
+* `scaled_K`: 51 total failures versus 83 for `unscaled_K`.
+* `scaled_K': 45 more malignant cells correctly identified.
+
+```{r K_comp_table}
+# quick and dirty comp table
+cbind(cbind(TrV = table(true_values)), 
+      cfm_unscaled_k$table, 
+      cfm_scaled_k$table) %>% 
+  knitr::kable(caption = "L-R: True Values, Unscaled K, Scaled K" )
+# 83 total vs 51 total
+# 45 more malignant cells correctly id
+```
+
+
+So proof of concept. For some ML approaches, as we learned in the *Harvard edx* ML course, centering and scaling the data yields better results.
+
+Thus far, we have two preparations.  The null model, so to speak: no preprocessing. And the first, centering and scaling.  This brings us to another common data preprocessing routine for ML, *Principal Component Analysis* (PCA).[^5] 
+
+### Principal Component Analysis (PCA)
+*PCA* is particularly well-suited to dealing with large data sets that have many observations and likely collinearity among (at least some of) the predictor variables. *PCA* helps deal with the "curse of dimensonality"[^14] by using an orthogonal transformation to produce "a set of values of linearly uncorrelated variables" or principal components.[^15] Typically, if *PCA* is a good fit, only small number of principal components will be needed to explain the vast majority of variance in the data set.
+
+The `wdbc_data` does have 30 predictor variables for describing 10 features, and it likewise seems correlation must exist among such variables as `area_mean`, `radius_mean`, and `perimeter_mean`.  But the data set only has 569 observations. So *PCA* might not add as much value as it would for a larger data set.
+
+But because this is a experiment in and a report on model testing, we will include *PCA* as a data preprocessing routine. 
+
+#### PCA Biplot
+For EDA purposes, running `wdbc_PCA <- prcomp(wdbc_mx, center = TRUE, scale = TRUE)` returns the following biplot:
+
+```{r PCA_1, echo = TRUE}
+biplot(wdbc_PCA, cex = 0.45)
+```
+
+The closer the lines are, the more correlated the variables.  To no surprise, `fractal_dimension_mean` (bottom-center) and `radius_mean` (top-left) are at a near 90 degrees angle: no meaningful collinearity. In contrast, `radius_mean` and `area_mean` (both top-left) are so correlated that the lines and labels almost merge.
+
+The table below samples the first 5 principal components, showing how each has transformed the first eight predictor variables in the original data set.
+
+```{r PCA_first_5}
+wdbc_PCA$rotation[1:8, 1:5] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Variable") %>%  
+  knitr::kable(caption = "PCA Matrix: First 8 Variables for First 5 PC")
+```
+
+
+#### Cummulative Variance Explained
+If we plot the PCA summary results, we see that these same 5 principal components explain nearly 85% of the data variance, and the first 10 principal components explain over 95%.
+
+```{r PCA_2}
+graph_PCA <- importance_df[1:12, ] %>% 
+  ggplot( aes(reorder(PCA, Sum_Exp), Sum_Exp)) + 
+  geom_point() +
+  labs(title = "PCA Results: 10 components explain over 95% variance", 
+       x = "Principal Component Analysis: 1-12 of 30" , 
+       y = "Variance Explained", subtitle = "WDBC (Wisconsin Diagnostic Breast Cancer) data set") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  geom_hline(aes(yintercept = 0.95), color = "orange", linetype = 2)
+
+graph_PCA 
+```
+
+The table below provides the detailed summary results for the same first 5 principal components.
+
+```{r PCA_chart}
+PCA_sum[["importance"]][, 1:5] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Results") %>%
+  knitr::kable(caption = "PCA Summary: First 5 Components")
+
+```
+
+##### PC1 & PC2 vs. PC4 & PC5
+Between them, PC1 and PC2 explain 63% of the data variance; PC4 and PC5, 12%.  We can plot the data directly against both pairs, as follows:
+
+
+```{r PCAmulti_plot, warning = FALSE}
+# http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+# Winston Chang
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots == 1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+multiplot(plot_PCA1_2,plot_PCA4_5 , cols = 2) 
+
+```
+
+To no surprise, for PC1 and PC2, which are orthogonally opposed to each other, we have two fairly distinct groupings; but for PC4 and PC5, which explain considerably less variance and by necessity are closer, display no such clear groupings. 
+
+#### PCA Summary
+The law of diminishing returns sets in quickly with *PCA*.  It breaks the `wdbc_data` down into 30 principal components, but by  PC17, `0.9911300` of the variance is explained: for all practical purposes, PC18 to PC30 add nothing and could be safely dropped from modelling.
+
+In principle, this data set (if larger) should strongly benefit from PCA preprocessing.
+
+## Modelling 
+As discussed above in the **Overview**, this project uses an ensemble of twenty-one ML alogorithms (models), on two different training and test splits and with three different data preprocesing routines.  So each model is run six times total, and the results are evaluated for **Accuary** (correctly predicting "M" or malignant) and **F Measure**.
+```{r Model_Runs_All }
+#############################   50/50 train/test split
+Y <- wdbc_data$diagnosis
+
+set.seed(2019)
+test_index <- createDataPartition(Y, times = 1, p = 0.5, list = FALSE)
+
+# Apply index
+test_set_id <- wdbc_data[test_index, ] # will use ID later
+train_set_id <- wdbc_data[-test_index, ]
+
+# Remove id for testing
+test_set <- test_set_id %>% select(-id)
+train_set <- train_set_id %>% select(-id)
+
+set.seed(2019)
+test_index2 <- createDataPartition(Y, times = 1, p = 0.18, list = FALSE)
+# Apply index
+test2_id <- wdbc_data[test_index2, ]
+train2_id <- wdbc_data[-test_index2, ]
+# Remove id variable
+test_2 <- test2_id %>% select(-id)
+train_2 <- train2_id %>% select(-id)
+
+########  trainControl and Data Preparations for all models
+## NOTE: To have reproducible results for ensemble modeling, must use seeds argument in trainControl
+set.seed(2019)
+seeds <- vector(mode = "list", length =  1000)
+for (i in 1:1000) seeds[[i]] <- sample.int(1000, 800)
+
+###  Re-usable trainControl for consistent comparison across models
+#
+###  Does NOT change: same for all models
+myControl <- trainControl(
+  method = "cv", number = 10,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE, # IMPORTANT!
+  verboseIter = TRUE,
+  seeds = seeds
+)   
+
+##
+# Experiement with preprocessing: one NULL, two typical
+##
+prep_0 <- NULL
+prep_1 <- c("center", "scale")
+prep_2 <- c("nzv", "center", "scale", "pca")
+
+###
+## Select Models for Ensemble: 21
+###
+models <- c("adaboost", "avNNet", "gamboost", "gamLoess", "glm", 
+            "gbm", "knn", "kknn", "lda", "mlp", "monmlp", "naive_bayes", 
+            "qda", "ranger", "Rborist", "rf", "rpart", "svmLinear", "svmRadial", 
+            "svmRadialCost", "svmRadialSigma")
+
+mod_names <- enframe(models, value = "Model", name = NULL) 
+
+###############################################################################
+## SAVE POINT: 
+## NEXT: Modelling and Results
+###############################################################################
+
+
+#
+#
+######################################## First Run : 50/50 ############################
+
+set.seed(2019)
+garbage_0 <- capture.output(  
+  fits_0 <- lapply(models, function(model){
+  print(model)
+  train(diagnosis ~ ., data = train_set,  method = model,
+        trControl = myControl, preProcess = prep_0)
+}) 
+)
+
+names(fits_0) <- models
+
+#  Predictions 0
+predictions_0 <- sapply(fits_0, function(object) 
+  predict(object, newdata = test_set))
+
+# Predictions for CFM & F Measure
+pred_ft_0 <- predictions_0 %>% as.data.frame() %>% 
+  mutate_if(., is.character, as.factor) %>% 
+  mutate_all(., factor, levels = c("M", "B")) # Set malignant as POSITIVE
+
+# Confusion Matrix for Prep_0
+CFM_Prep_0 <- sapply(pred_ft_0 , function(object) {
+  CFM <- confusionMatrix(data = object,  reference = test_set$diagnosis)
+  list(CFM)
+}) 
+
+########### Quick and Dirty extract for all CFM Lists!
+ACC_dex <- c(6, 30, 54, 78, 102, 126, 150,174 ,198 ,222 ,246, 
+             270 ,294 ,318 ,342, 366, 390, 414, 438, 462, 486) # Accuracy score
+
+F1_dex <- c(19, 43, 67, 91, 115, 139, 163, 187, 211, 235, 259, 283, 
+            307, 331, 355, 379, 403, 427, 451, 475, 499) # F1 score
+############
+
+CFM_mess_0 <- CFM_Prep_0 %>% unlist() %>% as.data.frame() # create an ordered mess
+
+CFM_0_Keys <- bind_cols(mod_names, 
+                        Accuracy = round(as.numeric(as.character(CFM_mess_0[ACC_dex,])),4) , 
+                        F_Measure = round(as.numeric(as.character(CFM_mess_0[F1_dex,])),4) 
+) %>%
+  mutate(Total = Accuracy + F_Measure) # grab values: convert from factor to numeric; round
+
+#
+## Prep_1 center, scale
+set.seed(2019)
+garbage_1 <- capture.output(
+  fits_1 <- lapply(models, function(model){
+    print(model)
+    train(diagnosis ~ ., data = train_set,  method = model,
+          trControl = myControl, preProcess = prep_1)
+  }) 
+)
+names(fits_1) <- models
+
+##
+#  Predictions
+predictions_1 <- sapply(fits_1, function(object) 
+  predict(object, newdata = test_set))
+
+# Predictions for CFM & F Measure
+pred_ft_1 <- predictions_1 %>% as.data.frame() %>% 
+  mutate_if(., is.character, as.factor) %>% 
+  mutate_all(., factor, levels = c("M" , "B"))
+
+# Confusion Matrix List for Prep_1
+CFM_Prep_1 <- sapply(pred_ft_1 , function(object) {
+  CFM <- confusionMatrix(data = object,  reference = test_set$diagnosis)
+  list(CFM)
+}) 
+
+
+CFM_mess_1 <- CFM_Prep_1 %>% unlist() %>% as.data.frame()  # mess!
+
+CFM_1_Keys <- bind_cols(mod_names, 
+                        Accuracy = round(as.numeric(as.character(CFM_mess_1[ACC_dex,])), 4 ) , 
+                        F_Measure = round(as.numeric(as.character(CFM_mess_1[F1_dex,])), 4 ) 
+) %>%
+  mutate(Total = Accuracy + F_Measure)
+
+
+#
+#
+## Prep 2: nzv, center, scale, pca
+set.seed(2019)
+garbage_2 <- capture.output(
+fits_2 <- lapply(models, function(model){ 
+  print(model)
+  train(diagnosis ~ ., data = train_set,  method = model,
+        trControl = myControl, preProcess = prep_2)
+}) 
+)
+
+names(fits_2) <- models
+
+# Predictions
+predictions_2 <- sapply(fits_2, function(object) 
+  predict(object, newdata = test_set))
+
+pred_ft_2 <- predictions_2 %>% as_tibble() %>% 
+  mutate_if(., is.character, as.factor) %>% 
+  mutate_all(., factor, levels = c("M" , "B"))
+
+
+# Confusion Matrix for Prep_2
+CFM_Prep_2 <- sapply(pred_ft_2 , function(object) {
+  CFM <- confusionMatrix(data = object,  reference = test_set$diagnosis)
+  list(CFM)
+}) 
+
+CFM_mess_2 <- CFM_Prep_2 %>% unlist() %>% as.data.frame() 
+
+CFM_2_Keys <- bind_cols(mod_names, 
+                        Accuracy = round(as.numeric(as.character(CFM_mess_2[ACC_dex,])), 4), 
+                        F_Measure = round(as.numeric(as.character(CFM_mess_2[F1_dex,])), 4)
+) %>%
+  mutate(Total = Accuracy + F_Measure) 
+
+
+
+set.seed(2019)
+garbage_3 <- capture.output(
+fits_3.0 <- lapply(models, function(model){ 
+  print(model)
+  train(diagnosis ~ ., data = train_2,  method = model,
+        trControl = myControl, preProcess = prep_0)
+}) 
+)
+names(fits_3.0) <- models
+
+# Predictions
+predictions_3.0 <- sapply(fits_3.0, function(object) 
+  predict(object, newdata = test_2))
+
+pred_ft_3.0 <- predictions_3.0 %>% as_tibble() %>% 
+  mutate_if(., is.character, as.factor) %>% 
+  mutate_all(., factor, levels = c("M", "B"))
+
+# Confusion Matrix for Prep_0
+CFM_Prep_3.0  <- sapply(pred_ft_3.0 , function(object) {
+  CFM <- confusionMatrix(data = object,  reference = test_2$diagnosis)
+  list(CFM)
+}) 
+
+CFM_mess_3.0 <- CFM_Prep_3.0 %>% unlist() %>% as.data.frame() 
+
+CFM_3.0_Keys <- bind_cols(mod_names, 
+                          Accuracy = round(as.numeric(as.character(CFM_mess_3.0[ACC_dex,])), 4), 
+                          F_Measure = round(as.numeric(as.character(CFM_mess_3.0[F1_dex,])), 4) 
+) %>%
+  mutate(Total = Accuracy + F_Measure) 
+
+
+#  
+##  Prep_1 model center, scale
+#
+set.seed(2019)
+garbage_3.1 <- capture.output(
+fits_3.1 <- lapply(models, function(model){ 
+  print(model)
+  train(diagnosis ~ ., data = train_2,  method = model,
+        trControl = myControl, preProcess = prep_1)
+}) 
+)
+
+names(fits_3.1) <- models
+
+# Predictions Prep_1
+predictions_3.1 <- sapply(fits_3.1, function(object) 
+  predict(object, newdata = test_2))
+
+pred_ft_3.1 <- predictions_3.1 %>% as_tibble() %>% 
+  mutate_if(., is.character, as.factor) %>% 
+  mutate_all(., factor, levels = c("M", "B"))
+
+# Confusion Matrix for Prep_1
+CFM_Prep_3.1  <- sapply(pred_ft_3.1 , function(object) {
+  CFM <- confusionMatrix(data = object,  reference = test_2$diagnosis)
+  list(CFM)
+}) 
+
+CFM_mess_3.1 <- CFM_Prep_3.1 %>% unlist() %>% as.data.frame() 
+
+CFM_3.1_Keys <- bind_cols(mod_names, 
+                          Accuracy = round(as.numeric(as.character(CFM_mess_3.1[ACC_dex,])), 4) , 
+                          F_Measure = round(as.numeric(as.character(CFM_mess_3.1[F1_dex,])), 4) 
+) %>%
+  mutate(Total = Accuracy + F_Measure) 
+
+
+#  
+##  Prep_2 model nzv, center, scale, pca
+#
+set.seed(2019)
+garbage_3.2 <- capture.output(
+fits_3.2 <- lapply(models, function(model){ 
+  print(model)
+  train(diagnosis ~ ., data = train_2,  method = model,
+        trControl = myControl, preProcess = prep_2)
+}) 
+)
+
+names(fits_3.2) <- models
+
+# Predictions Prep_2
+predictions_3.2 <- sapply(fits_3.2, function(object) 
+  predict(object, newdata = test_2))
+
+pred_ft_3.2 <- predictions_3.2 %>% as_tibble() %>% 
+  mutate_if(., is.character, as.factor) %>% 
+  mutate_all(., factor, levels = c("M", "B"))
+
+# Confusion Matrix for Prep_2
+CFM_Prep_3.2  <- sapply(pred_ft_3.2 , function(object) {
+  CFM <- confusionMatrix(data = object,  reference = test_2$diagnosis)
+  list(CFM)
+}) 
+
+CFM_mess_3.2 <- CFM_Prep_3.2 %>% unlist() %>% as.data.frame() 
+
+CFM_3.2_Keys <- bind_cols(mod_names, 
+                          Accuracy = round(as.numeric(as.character(CFM_mess_3.2[ACC_dex,])), 4) , 
+                          F_Measure = round(as.numeric(as.character(CFM_mess_3.2[F1_dex,])), 4) 
+) %>%
+  mutate(Total = Accuracy + F_Measure) 
+
+rm(garbage_0, garbage_1, garbage_2, garbage_3, garbage_3.1, garbage_3.2)
+
+
+###############################  Results  #########################################
+
+#
+# Run One: 50/50
+
+Accuracy_Table_1 <- bind_cols(Model = mod_names, 
+                              Acc_0 = CFM_0_Keys$Accuracy, 
+                              F1_0 = CFM_0_Keys$F_Measure, 
+                              Acc_1 = CFM_1_Keys$Accuracy, 
+                              F1_1 = CFM_1_Keys$F_Measure, 
+                              Acc_2 = CFM_2_Keys$Accuracy, 
+                              F1_2 = CFM_2_Keys$F_Measure) %>% 
+  mutate(Top_PreProcess = (Acc_1  + Acc_2) / 2, 
+         Top_Overall = (Acc_0  + Acc_1  + Acc_2) / 3) 
+
+
+## Averages
+h_line_Acc_0 <- mean(Accuracy_Table_1$Acc_0)
+h_line1_Acc_1 <- mean(Accuracy_Table_1$Acc_1)
+h_line2_Acc_2 <- mean(Accuracy_Table_1$Acc_2)
+
+Accuracy_Run_One_Viz <- Accuracy_Table_1 %>% 
+  ggplot(aes(Model, Acc_0)) +
+  geom_jitter(color = "red", alpha = 0.6, width = 0.44, height = -0.1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  geom_jitter(aes(y = Acc_1),  color = "blue",  
+              alpha = 0.6, width = 0.5, height = 0) + 
+  geom_jitter(aes(y = Acc_2), color = "green" , alpha = 0.6, width = 0.44, height = 0) +
+  geom_hline(yintercept = h_line1_Acc_1, linetype = 2, color = "blue", alpha = 0.3) +
+  geom_hline(yintercept = h_line_Acc_0, linetype = 2, color = "red", alpha = 0.3) +
+  geom_hline(yintercept = h_line2_Acc_2, linetype = 2, color = "green", alpha = 0.5) +
+  labs(title = "All Models: Accuracy Scores: 50/50 Split", 
+       subtitle = "Prep by color: Red 0; Blue 1; Green 2",
+       y = "Accuracy Rate", caption = "H-lines = Prep avg.")
+
+## Replot
+Accuracy_Table_1a <- Accuracy_Table_1 
+Accuracy_Table_1a$Acc_0[10] <- NA # induce NA to remove mlp outlier
+h_line_Acc_0_check <- mean(Accuracy_Table_1a$Acc_0, na.rm = TRUE) # without MLP_0
+
+Accuracy_Run_One_reViz <- Accuracy_Table_1a  %>% 
+  ggplot(aes(Model, Acc_0)) +
+  geom_jitter(color = "red", alpha = 0.6, width = 0.4, height = 0) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  geom_jitter(aes(y = Acc_1),  color = "blue",  
+              alpha = 0.6, width = 0.5, height = 0) + 
+  geom_jitter(aes(y = Acc_2), color = "green", alpha = 0.6, width = 0.4, height = 0) +
+  geom_hline(yintercept = h_line_Acc_0, linetype = 2, color = "red", alpha = 0.3) +
+  geom_hline(yintercept = h_line1_Acc_1, linetype = 2, color = "blue", alpha = 0.3) +
+  geom_hline(yintercept = h_line2_Acc_2, linetype = 2, color = "green", alpha = 0.5) +
+  geom_hline(yintercept = h_line_Acc_0_check , linetype = 2, color = "orange", alpha = 0.5) +
+  labs(title = "All Models: Accuracy Scores: 50/50 Split", 
+       subtitle = "Prep by color: Red 0; Blue 1; Green 2",
+       y = "Accuracy Rate", 
+       caption = "H-lines = Prep avg.; Prep_0 for MLP not plotted: 0.6281")
+
+## Top Seven Models Per Prep, Run One
+Top_Seven_0 <- Accuracy_Table_1 %>% arrange(desc(Acc_0)) %>% 
+  select(Model_0 = Model, Prep_Null = Acc_0) %>% slice(1:7)
+Top_Seven_1 <- Accuracy_Table_1 %>% arrange(desc(Acc_1)) %>% 
+  select(Model_1 = Model, Prep_1 = Acc_1) %>% slice(1:7)
+Top_Seven_2 <- Accuracy_Table_1 %>% arrange(desc(Acc_2)) %>% 
+  select(Model_2 = Model, Prep_2 = Acc_2) %>% slice(1:7) 
+Top_Overall <- Accuracy_Table_1 %>% arrange(desc(Top_Overall)) %>% 
+  select(Model_Overall = Model, Avg_Acc = Top_Overall) %>% slice(1:7) 
+Top_Seven_50_Split <- bind_cols(Top_Seven_0, Top_Seven_1, 
+                                Top_Seven_2, Top_Overall)
+
+
+Accuracy_Table_2 <- bind_cols(Model = mod_names, 
+                              Acc_3.0 = CFM_3.0_Keys$Accuracy, 
+                              F1_3.0 = CFM_3.0_Keys$F_Measure, 
+                              Acc_3.1 = CFM_3.1_Keys$Accuracy,  
+                              F1_3.1 = CFM_3.1_Keys$F_Measure, 
+                              Acc_3.2 = CFM_3.2_Keys$Accuracy, 
+                              F1_3.2 = CFM_3.2_Keys$F_Measure) %>% 
+  mutate(Top_PreProcess = (Acc_3.1  + Acc_3.2) / 2, 
+         Top_Overall = (Acc_3.0  + Acc_3.1  + Acc_3.2) / 3) 
+
+# Remove mlp NULL for chart
+Accuracy_Table_2a <- Accuracy_Table_2 
+Accuracy_Table_2a$Acc_3.0[10] <- NA # induce NA
+
+h_line_Acc_3.0 <- mean(Accuracy_Table_2$Acc_3.0) 
+h_line_Acc_3.1 <- mean(Accuracy_Table_2$Acc_3.1)
+h_line_Acc_3.2 <- mean(Accuracy_Table_2$Acc_3.2)
+h_line_check_3.0 <- mean(Accuracy_Table_2a$Acc_3.0, 
+                     na.rm = TRUE ) # remove mlp 
+
+
+Accuracy_Run_Two_reViz <- Accuracy_Table_2a  %>% 
+  ggplot(aes(Model, Acc_3.0)) +
+  geom_jitter(color = "red", alpha = 0.6, width = 0.4, height = 0) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  geom_jitter(aes(y = Acc_3.1),  color = "blue",  
+              alpha = 0.6, width = 0.5, height = 0) + 
+  geom_jitter(aes(y = Acc_3.2), color = "green", alpha = 0.6, width = 0.4, height = 0) +
+  geom_hline(yintercept = h_line_Acc_3.0, linetype = 2, color = "red", alpha = 0.3) +
+  geom_hline(yintercept = h_line_Acc_3.1, linetype = 2, color = "blue", alpha = 0.3) +
+  geom_hline(yintercept = h_line_Acc_3.2, linetype = 2, color = "green", alpha = 0.5) +
+  geom_hline(yintercept = h_line_check_3.0, linetype = 2, color = "orange", alpha = 0.5) +
+  labs(title = "All Models: Accuracy Scores: 82/18 Split", 
+       subtitle = "Prep by color: Red 3.0; Blue 3.1; Green 3.2",
+       y = "Accuracy Rate", 
+       caption = "H-lines = Prep avg.; Prep_3.0 for MLP not plotted: 0.6281")
+
+
+# Top Seven Models Run Two
+Top_Seven_3.0 <- Accuracy_Table_2 %>% arrange(desc(Acc_3.0)) %>% 
+  select(Model_3.0 = Model, Prep_Null = Acc_3.0) %>% slice(1:7)
+Top_Seven_3.1 <- Accuracy_Table_2 %>% arrange(desc(Acc_3.1)) %>% 
+  select(Model_3.1 = Model, Prep_1 = Acc_3.1) %>% slice(1:7)
+Top_Seven_3.2 <- Accuracy_Table_2 %>% arrange(desc(Acc_3.2)) %>% 
+  select(Model_3.2 = Model, Prep_2 = Acc_3.2) %>% slice(1:7) 
+Top_Overall_82 <- Accuracy_Table_2 %>% arrange(desc(Top_Overall)) %>% 
+  select(Model_Overall = Model, Avg_Acc = Top_Overall) %>% slice(1:7)  
+Top_Seven_82_Split <- bind_cols(Top_Seven_3.0, Top_Seven_3.1, 
+                                Top_Seven_3.2, Top_Overall_82 )
+#  Comparing Run Results
+
+Overall_Accuracy_Table <- bind_cols(
+  Accuracy_Table_1 %>% 
+    select(Model, starts_with("Acc")),
+  Accuracy_Table_2 %>% 
+    select(starts_with("Acc")) 
+) %>% 
+  mutate(Top_PreProcess = (Acc_1 + Acc_2 + Acc_3.1  + Acc_3.2) / 4, 
+         Top_Overall = (Acc_0 + Acc_1 + Acc_2 + Acc_3.0  + Acc_3.1  + Acc_3.2) / 6) %>%
+  arrange(desc(Top_Overall))
+
+```
+
+
+### Models and Preparations
+The data preproccsing commands for `caret`, and the models for the ensemble as below:
+
+```{r modelling_info, echo = TRUE, eval = FALSE}
+##
+# Experiement with preprocessing: one NULL, two typical
+##
+prep_0 <- NULL
+prep_1 <- c("center", "scale")
+prep_2 <- c("nzv", "center", "scale", "pca")
+
+###
+## Select Models for Ensemble: 21
+###
+models <- c("adaboost", "avNNet", "gamboost", "gamLoess", "glm", "gbm", 
+            "knn", "kknn", "lda", "mlp", "monmlp", "naive_bayes", "qda", 
+            "ranger", "Rborist", "rf", "rpart", "svmLinear", "svmRadial", 
+            "svmRadialCost", "svmRadialSigma")
+
+mod_names <- enframe(models, value = "Model", name = NULL) 
+```
+
+Each model for each run, split, and prep, shares the same `trainControl` as discussed in the **Overview**, with cv (cross validation) set to "10". 
+
+The generic function for running the ensemble is as follows:
+
+```{r Model_func, echo = TRUE, eval = FALSE}
+
+set.seed(2019)
+fits_1 <- lapply(models, function(model){
+  print(model)
+  train(diagnosis ~ ., data = train_set,  method = model,
+        trControl = myControl, preProcess = prep_1)
+}) 
+
+```
+
+`fits_1`, in this case, indicates Run One on the 50/50 split, using `prep_1`: the data centered and scaled.  The model results are then used to make predictions against the test set, and the results are saved as a dataframe to generate a `confustionMatrix` per model saved as a large list.
+
+
+```{r cfm_example,  echo = TRUE, eval = FALSE}
+#  Predictions
+predictions_1 <- sapply(fits_1, function(object) 
+  predict(object, newdata = test_set))
+
+# Predictions for CFM & F Measure
+pred_ft_1 <- predictions_1 %>% as.data.frame() %>% 
+  mutate_if(., is.character, as.factor) %>% 
+  mutate_all(., factor, levels = c("M" , "B"))
+
+# Confusion Matrix List for Prep_1
+CFM_Prep_1 <- sapply(pred_ft_1 , function(object) {
+  CFM <- confusionMatrix(data = object,  reference = test_set$diagnosis)
+  list(CFM)
+}) 
+
+```
+
+The *Accuracy* and *F Measure* scores per model, and other results as needed, are then pulled from the `confusionMatrix` list: in the example above, `CFM_Prep_1`.
+
+## Train and Test Splitting
+The first train/test split is an arbitrary 50/50, intended to examine how well particular models work with limited data. The second train/test split, meant to examine how well the models learn on more data, follows a debatable rule of thumb that the final validation set should "be inversely proportional to the square root of the number of free adjustable parameters."[^16]  Since `1/sqrt(30)` rounds out to 18%, leaving 104 observations in the final test set, 82/18 seemed good enough.
+
+```{r train_test, echo = TRUE, eval = FALSE}
+#  Create first stage train and test sets:  50% for model training; 50% for testing
+#  Second stage: 82% train; 18 % test
+#############################   50/50 train/test split
+# which models do well with limited data?
+Y <- wdbc_data$diagnosis
+
+set.seed(2019)
+test_index <- createDataPartition(Y, times = 1, p = 0.5, list = FALSE)
+
+# Apply index
+test_set_id <- wdbc_data[test_index, ] # will use ID later
+train_set_id <- wdbc_data[-test_index, ]
+
+# Remove id for testing
+test_set <- test_set_id %>% select(-id)
+train_set <- train_set_id %>% select(-id)
+
+#############################   82/18 train/test split  test_ratio <- 1/sqrt(30) 
+#  Which models have an ML advantage?
+
+set.seed(2019)
+test_index2 <- createDataPartition(Y, times = 1, p = 0.18, list = FALSE)
+# Apply index
+test2_id <- wdbc_data[test_index2, ]
+train2_id <- wdbc_data[-test_index2, ]
+# Remove id variable
+test_2 <- test2_id %>% select(-id)
+train_2 <- train2_id %>% select(-id)
+```
+
+
+A basic assumption of ML is that as the amount of training data increases, the model improves in terms of accuracy as it *learns* from the data.  As we will see, this does NOT hold true in every case: or, at least, models improve at disparate rates depending on the data characteristics, the preprocessing (if any), and other conditions and constraints.
+
+# Results
+
+## Run One: 50/50 Train/Test
+We will start with the big picture for Run One: graphing the accuracy scores for the 50/50 training test split, all data preprocessing routines.  Then, I will break down Run One by prep: the preprocessing routine.  Finally, I will offer the overall summary statistics.
+
+```{r chart_one_Run_one, warning = FALSE}
+Accuracy_Run_One_Viz # includes outlier mlp prep_0
+```
+
+### High Performers and One Outlier
+Right away, we see wildly different results per model according to the data preparation.  In fact, using the *multi-layer perceptron* neural network model[^17], `mlp`, on the raw data (`Prep_0` or no preprocessing) returns an accuracy score equivalent to guessing: to the *No Information Rate*.  The confusion matrix results below:
+
+```{r MLP_CFM_0, echo = TRUE}
+CFM_Prep_0$mlp
+```
+
+
+Importantly, MLP_0 failed to correctly identify any malignant cells.  If `trainControl` were not set to `summaryFunction = twoClassSummary`, the accuracy rate would be 0 (zero).  In contrast, MLP_1 (center, scale) and MLP_2 (nzv, center, scale, pca) show significant improvement.
+
+
+```{r MLP_Run_One}
+Accuracy_Table_1 %>% filter(Model == "mlp") %>% 
+  rename("PreProcess_Acc" = Top_PreProcess, "Overall_Acc" = Top_Overall) %>%
+  knitr::kable(caption = "mlp Results: Run One")
+```
+
+In contrast to `mlp` on the raw data, `svmLinear`, `svmRadialCost`, and `svmRadialSigma`, three of the *Support vector-machine*[^18] learning models natively supported by `caret`[^19], do surprising well with no data pre-processing and prove generally robust for all preps tested. 
+
+### Other Neural Network Models
+But the issue with `mlp` seems not to apply generally to all *neural network* models: two other neural network models, also did well across all preps: `avNNet` (*Neural Networks Using Model Averaging*)[^20] and `monmlp` (*Multi-Layer Perceptron Neural Network with Optional Monotonicity Constraints*).[^21]
+
+
+```{r Other_Neural_Net_Run_one}
+Accuracy_Table_1 %>% filter(Model == "avNNet") %>% 
+  rename("PreProcess_Acc" = Top_PreProcess, "Overall_Acc" = Top_Overall) %>%
+  knitr::kable(caption = "avNNet Results: Run One")
+
+Accuracy_Table_1 %>% filter(Model == "monmlp") %>% 
+  rename("PreProcess_Acc" = Top_PreProcess, "Overall_Acc" = Top_Overall) %>%
+  knitr::kable(caption = "monmlp Results: Run One")
+
+```
+
+
+The above graph will be replotted, removing the `mlp` `prep_0` outlier, so that we can see the other results clearer, but first we will examine the results by `prep` (data preprocessing routine).
+
+### Run One: Results by Preprocessing Routine
+```{r prep_one, echo = FALSE}
+CFM_0_Keys %>% arrange(desc(Total)) %>% head(n = 7) %>% 
+  knitr::kable(caption = "Run One: NULL prep: Top Seven Models")
+#
+CFM_1_Keys %>% arrange(desc(Total)) %>% head(n = 7) %>% 
+  knitr::kable(caption = "Run One: Prep_1: Top Seven Models")
+#
+CFM_2_Keys %>% arrange(desc(Total)) %>% head(n = 7) %>% 
+  knitr::kable(caption = "Run One: Prep_2: Top Seven Models")
+ 
+```
+
+The results for Run One are mixed. The two highest overall accuracy scores occurred on the raw data (`prep_0`) and the centered and scaled data (`prep_1`), the model `svmLinear` in both cases 
+
+But for the top seven models overall, 1/3 of the models tested, Prep_2 (pca) provided the best average scores, with `svmLinear` not even finishing in the top seven.
+
+### Visual Overview Revisited
+Let's re-run the graph after removing MLP_0 as an outlier; following the revised graph, we will consult a summary table of the top seven models overall for Run One.
+
+
+```{r first_run_graph_rev, warning = FALSE}
+## Averages
+Accuracy_Run_One_reViz # removes outlier mlp prep_0
+```
+
+I've added one more line for this graph, in orange, showing the average accuracy score for `prep_0`, NULL, if we remove MLP_0. In fact, with the outlier removed, the average score for `prep_0` is now `0.949655`; this shows a performance improvement over the average score for `prep_2` (pca): `0.9480333`. 
+
+Again, the benefits of *PCA* are best realized with large data sets containing both many observartions and predictor variables. But that said, if we look at the average accuracy score for the top seven models for each prep, using *PCA* seems to be having some effect:
+
+### Run One: Top Averages Per Prep
+```{r top_seven_ONE_avgs}
+Top_Seven_50_Split %>% summarize(Avg_Prep_0 = mean(Prep_Null), Avg_Prep_1 = mean(Prep_1), 
+                                 Avg_Prep_2 = mean(Prep_2)) %>% 
+  knitr::kable(caption = "Run One: Mean Accuracy by Prep for Top Seven Models")
+```
+
+We'll see if using *PCA* results in any significant gains for the second split, when we increase the size of the training set.  We'll also see if our list of top models changes.
+
+It's also noting that popular models such as `naive_bayes`, `rpart`, and `Rborist` are among the worst performers. (This will hold true for the next run).  Although these model would likely benefit from further tuning, one should be careful about choosing a model based on its current cachet. 
+
+Below, summary table for Run One: 50/50 test and train split.
+
+### Run One: Summary Table
+```{r first_run_sum_tables}
+Top_Seven_50_Split %>% 
+  knitr::kable(caption = "Run One: Top Seven Models by Accuracy per Prep") 
+```
+
+
+## Run Two: 82/18 Train/Test
+Similar to Run One, We will start with the big picture for Run Two : graphing the accuracy scores for the 82/18 training test split, all data preprocessing routines.  Then, I will break down Run Two by prep: the preprocessing routine.  Finally, I will offer the overall summary statistics.
+
+Since MLP_3.0, `mlp` on the raw data for the 82/18 split, also returns an *Accuracy* score equivalent to the *No Information Rate*, it has been removed from the following graph.
+
+### Run Two: Visual Overview 
+
+```{r graph_run_two, echo = FALSE, warning = FALSE}
+# removes outlier mlp prep_3.0
+Accuracy_Run_Two_reViz 
+```
+
+Some models clearly learned from the increased data set better than others. In particular, `gamLoess` finished with the highest accuracy score overall -- and did generally well on all preps, in clear contrast to its performance for Run One. *Best learner*: `gamLoess`.  The *Support-vector machine* models again proved robust, with `svmRadialSigma` as one of the top three models for all preps.
+
+Similar to Run One, the highest average accuracy score for all models resulted from centering and scaling the data (Prep_3.1); the lowest, from no data pre-processing (Prep_3.0); but the lowest corrected score (MLP_3.0 removed) resulted from using *PCA*.  Valuable as *PCA* is, not all ML projects--depending on the data or model or desired outcomes--benefit from using it.
+
+Similar also to Run One, `naive_bayes`, `rpart`, and `Rborist` performed (relatively) poorly; and `qda` took a step backwards.  Again, no doubt all these models would benefit from tuning: but as tested under these conditions, they qualify as the *worst learners*.
+
+### Run Two: Results by Preprocessing Routine
+We will now look at the top seven results for each prep in turn:
+
+```{r second_run_results}
+CFM_3.0_Keys %>% arrange(desc(Total)) %>% head(n = 7) %>% 
+  knitr::kable(caption = "Run Two: NULL prep: Top Seven Models")
+#
+CFM_3.1_Keys %>% arrange(desc(Total)) %>% head(n = 7) %>% 
+  knitr::kable(caption = "Run Two: Prep_1: Top Seven Models" )
+ #
+CFM_3.2_Keys %>% arrange(desc(Total)) %>% head(n = 7) %>% 
+  knitr::kable(caption = "Run Two: Prep_2: Top Seven Models")
+ 
+```
+
+Four interesting results emerge from Prep_0 and Prep_1. First, the *Gradient boosting machine*[^22] model `gbm` shows up as a top performer.  It clearly benefits from having more data, and learns well (at least in this instance). Second, the *Adaptive Boosting*[^23] model `adaboost`, once the data is centered and scaled (and later, with PCA) also learns well.  Third, the *General Additive Model* with *LOESS* (locally weighted polynomial regression)[^24], `gamloess`, not only cracks the top seven unlike Run One, but when using Prep_2 turns in the highest accuracy score of all models tested.  Fourth and finally, the old school *Generalized Linear Model*[^25] `glm` also makes the top seven.
+
+### Run Two: Top Averages Per Prep
+If we average the accuracy scores for the top seven models per prep for Run Two, we find a slight advantage to preprocessing the data first rather than directly modeling the raw data:
+
+```{r top_Prep_Avg_run2}
+Top_Seven_82_Split %>% 
+  summarize(Avg_3.0 = mean(Prep_Null), Avg_3.1 = mean(Prep_1), 
+            Avg_3.2 = mean(Prep_2)) %>% 
+  knitr::kable(caption = "Run Two: Mean Accuracy by Prep for Top Seven Models")
+```
+
+Likewise, the best overall score does belong to `gamLoess` using `prep_2` *PCA*.  So the case for data preprocessing is not conclusive, given the data set under consideration, but some models (such as`mlp`) clearly either require or benefit strongly (`gamLoess`, `adaboost`) from data preprocessing.
+
+### Run Two: Summary Table
+The table for the top seven per prep as follows:
+```{r top_seven_run_two}
+Top_Seven_82_Split %>% 
+  knitr::kable(caption = "Run Two: Top Seven Models by Accuracy per Prep") 
+```
+
+For Prep_2, *PCA*, the model `avNNet` shows up again as a top performer with a higher accuracy score it had on the raw data or Prep_1 (the centered and scaled data). The advanced models `gamLoess`, `adaboost` and `gbm` now also show as top performers, presumably now because they had more data to learn from. And rounding it up overall, the versatile and robust `svmRadialSigma` remains a top performer; `glm` again sets the baseline performance to beat; and the other ML workhorse model `knn`, which was a top  performer for two Preps in Run One, cracks the top seven for the first time in Run Two Prep_1.
+
+For model development and evaluation purposes, `glm` and `knn` remain baseline performance standards for good reasons.
+
+
+## Top 10 Models: Both Runs All Preps
+We can now consider model performance for both runs and all preps. The table below records the accuaracy average first for `prep_1` and `prep_2`, "CS_to PCA", and second, including `prep_0` or NULL, for "All_Preps".
+
+```{r composite_acc_table}
+Overall_Accuracy_Table %>% slice(1:10) %>% rename("CS_to_PCA" = Top_PreProcess, "All_Preps" = Top_Overall) %>% 
+  knitr::kable(caption = "All Runs/Preps: Top 10 Models for Accuracy")
+```
+
+First, the *Support-vector machine* models `svm~` proved accurate and robust for both runs and all preps: this an impressive family of models, worth including in future ML projects if only for the development and testing stage.
+
+Second, the *Generalized additive models*, excepting the base `gam` model itself which was eliminated during development, also performed well overall and seemed to learn well when the training data was increased.
+
+Third, two of the neural network models,`avNNet` and `monmlp`, also showed promise.
+
+Fourth and finally, for this sort of data and modelling, the  classic *Generalized linear model* `glm`  finished in the top ten overall and remains the baseline performance standard to beat.
+```{r Failure_Tables_All}
+T_Set_ID <- test_set_id %>% select(id, diagnosis) # grab id and true values
+T2_ID <- test2_id %>% select(id, diagnosis) # ditto
+
+All_Predictions_Run_One <- bind_cols(T_Set_ID, pred_ft_0, pred_ft_1, pred_ft_2)
+All_Predictions_Run_One <- All_Predictions_Run_One %>%
+  mutate(Percent = rowMeans2(as.matrix(All_Predictions_Run_One[3:65]) ==  test_set_id$diagnosis)) %>%
+  select(id, diagnosis, Percent, everything() ) # observations ordered as in the test_set: 50/50
+
+All_Predictions_Run_Two <- bind_cols(T2_ID , pred_ft_3.0, pred_ft_3.1, pred_ft_3.2)
+All_Predictions_Run_Two <- All_Predictions_Run_Two %>%
+  mutate(Percent = rowMeans2(as.matrix(All_Predictions_Run_Two[3:65]) ==  T2_ID$diagnosis)) %>%
+  select(id, diagnosis, Percent, everything() ) # observations ordered as in test2: 82/18 
+
+
+names_vector_one <- c("id", "diagnosis", "Percent", "adaboost_0", "avNNet_0", "gamboost_0", "gamLoess_0", "glm_0", 
+                      "gbm_0", "knn_0", "kknn_0", "lda_0", "mlp_0",  "monmlp_0", "naive_bayes_0", "qda_0", "ranger_0", 
+                      "Rborist_0", "rf_0", "rpart_0",  "svmLinear_0", "svmRadial_0",  "svmRadialCost_0", "svmRadialSigma_0",   
+                      "adaboost_1", "avNNet_1", "gamboost_1", "gamLoess_1", "glm_1", "gbm_1", "knn_1",  "kknn_1", "lda_1", 
+                      "mlp_1",  "monmlp_1", "naive_bayes_1", "qda_1",  "ranger_1", "Rborist_1", "rf_1", "rpart_1" ,"svmLinear_1",
+                      "svmRadial_1", "svmRadialCost_1", "svmRadialSigma_1", "adaboost_2", "avNNet_2", "gamboost_2", "gamLoess_2",
+                      "glm_2", "gbm_2", "knn_2", "kknn_2", "lda_2", "mlp_2",  "monmlp_2", "naive_bayes_2", "qda_2", "ranger_2" , 
+                      "Rborist_2", "rf_2", "rpart_2", "svmLinear_2", "svmRadial_2",  "svmRadialCost_2", "svmRadialSigma_2")
+
+
+names(All_Predictions_Run_One)[1:66] <- names_vector_one
+
+
+
+names_vector_two <- c("id", "diagnosis", "Percent","adaboost_3.0", "avNNet_3.0", "gamboost_3.0", "gamLoess_3.0", "glm_3.0", "gbm_3.0", "knn_3.0", "kknn_3.0", 
+                      "lda_3.0", "mlp_3.0", "monmlp_3.0", "naive_bayes_3.0", "qda_3.0", "ranger_3.0", "Rborist_3.0", "rf_3.0", 
+                      "rpart_3.0", "svmLinear_3.0", "svmRadial_3.0", "svmRadialCost_3.0", "svmRadialSigma_3.0", "adaboost_3.1", 
+                      "avNNet_3.1", "gamboost_3.1", "gamLoess_3.1", "glm_3.1", "gbm_3.1", "knn_3.1", "kknn_3.1", "lda_3.1",
+                      "mlp_3.1", "monmlp_3.1", "naive_bayes_3.1", "qda_3.1", "ranger_3.1", "Rborist_3.1", "rf_3.1", "rpart_3.1", 
+                      "svmLinear_3.1", "svmRadial_3.1", "svmRadialCost_3.1", "svmRadialSigma_3.1", "adaboost_3.2", "avNNet_3.2", 
+                      "gamboost_3.2", "gamLoess_3.2", "glm_3.2", "gbm_3.2", "knn_3.2", "kknn_3.2", "lda_3.2", "mlp_3.2", 
+                      "monmlp_3.2", "naive_bayes_3.2", "qda_3.2", "ranger_3.2", "Rborist_3.2", "rf_3.2", "rpart_3.2", 
+                      "svmLinear_3.2", "svmRadial_3.2", "svmRadialCost_3.2", "svmRadialSigma_3.2") 
+
+names(All_Predictions_Run_Two)[1:66] <- names_vector_two
+
+Obvious_Cases <- full_join(All_Predictions_Run_One %>% 
+                             filter(Percent == 1) %>% select(id), 
+                           All_Predictions_Run_Two %>% 
+                             filter(Percent == 1) %>% select(id), by = "id") %>% 
+  left_join(wdbc_data, by = "id")
+
+
+
+###  Prep = NULL
+# identify failure points
+Fail_0 <- rowMeans2(predictions_0 == test_set_id$diagnosis) 
+# create index and success percentage
+Fail_Dex_0 <- bind_cols(dex = which(Fail_0 < 1), 
+                        percent = Fail_0[Fail_0  < 1] )
+# create table
+Fail_Table_0 <- bind_cols(Fail_Dex_0, pred_ft_0[Fail_Dex_0$dex, ], 
+                          T_Set_ID[Fail_Dex_0$dex, ] ) %>% 
+  select(id, diagnosis, percent, everything() , -dex) %>% 
+  arrange(percent)
+
+names_fail_0 <- c("id", "diagnosis", "Percent", "adaboost_0", "avNNet_0", "gamboost_0", "gamLoess_0", "glm_0", 
+                  "gbm_0", "knn_0", "kknn_0", "lda_0", "mlp_0",  "monmlp_0", "naive_bayes_0", "qda_0", "ranger_0", 
+                  "Rborist_0", "rf_0", "rpart_0",  "svmLinear_0", "svmRadial_0",  "svmRadialCost_0", "svmRadialSigma_0")
+
+names(Fail_Table_0)[1:24] <- names_fail_0 
+
+
+
+# Prep_1 = center, scale
+Fail_1 <- rowMeans2(predictions_1 == test_set_id$diagnosis) 
+# create index and success percentage
+Fail_Dex_1 <- bind_cols(dex = which(Fail_1 < 1), 
+                        percent = Fail_1[Fail_1  < 1] )
+# create table
+Fail_Table_1 <- bind_cols(Fail_Dex_1, pred_ft_1[Fail_Dex_1$dex, ], 
+                          T_Set_ID[Fail_Dex_1$dex, ] ) %>% 
+  select(id, diagnosis, percent, everything() , -dex) %>% 
+  arrange(percent)
+
+names_fail_1 <- c("id", "diagnosis", "Percent", "adaboost_1", "avNNet_1", "gamboost_1", "gamLoess_1", "glm_1", 
+                  "gbm_1", "knn_1", "kknn_1", "lda_1", "mlp_1",  "monmlp_1", "naive_bayes_1", "qda_1", "ranger_1", 
+                  "Rborist_1", "rf_1", "rpart_1",  "svmLinear_1", "svmRadial_1",  "svmRadialCost_1", "svmRadialSigma_1")
+
+
+names(Fail_Table_1)[1:24] <- names_fail_1
+
+
+
+
+# Prep_2 = nzv, center, scale, pca
+Fail_2 <- rowMeans2(predictions_2 == test_set_id$diagnosis) 
+# create index and success percentage
+Fail_Dex_2 <- bind_cols(dex = which(Fail_2 < 1), 
+                        percent = Fail_2[Fail_2  < 1] )
+# create table
+Fail_Table_2 <- bind_cols(Fail_Dex_2, pred_ft_2[Fail_Dex_2$dex, ], 
+                          T_Set_ID[Fail_Dex_2$dex, ] ) %>% 
+  select(id, diagnosis, percent, everything() , -dex) %>% 
+  arrange(percent)
+
+names_fail_2 <- c("id", "diagnosis", "Percent", "adaboost_2", "avNNet_2", "gamboost_2", "gamLoess_2", "glm_2", 
+                  "gbm_2", "knn_2", "kknn_2", "lda_2", "mlp_2",  "monmlp_2", "naive_bayes_2", "qda_2", "ranger_2", 
+                  "Rborist_2", "rf_2", "rpart_2",  "svmLinear_2", "svmRadial_2",  "svmRadialCost_2", "svmRadialSigma_2")
+
+names(Fail_Table_2)[1:24] <- names_fail_2
+
+
+
+# Prep = NULL
+Fail_3.0 <- rowMeans2(predictions_3.0 == test2_id$diagnosis) 
+
+Fail_Dex_3.0 <- bind_cols(dex = which(Fail_3.0 < 1), 
+                          percent = Fail_3.0[Fail_3.0  < 1] )
+
+Fail_Table_3.0 <- bind_cols(Fail_Dex_3.0, pred_ft_3.0[Fail_Dex_3.0$dex, ], 
+                            T2_ID[Fail_Dex_3.0$dex, ] ) %>% 
+  select(id, diagnosis, percent, everything() , -dex) %>% 
+  arrange(percent)
+
+names_fail_3.0 <- c("id", "diagnosis", "Percent", "adaboost_3.0", "avNNet_3.0", "gamboost_3.0", "gamLoess_3.0", "glm_3.0", 
+                    "gbm_3.0", "knn_3.0", "kknn_3.0", "lda_3.0", "mlp_3.0",  "monmlp_3.0", "naive_bayes_3.0", "qda_3.0", "ranger_3.0", 
+                    "Rborist_3.0", "rf_3.0", "rpart_3.0",  "svmLinear_3.0", "svmRadial_3.0",  "svmRadialCost_3.0", "svmRadialSigma_3.0") 
+
+
+names(Fail_Table_3.0)[1:24] <- names_fail_3.0
+
+
+
+# Prep_1 = center, scale
+Fail_3.1 <- rowMeans2(predictions_3.1 == test2_id$diagnosis) 
+
+Fail_Dex_3.1 <- bind_cols(dex = which(Fail_3.1 < 1), 
+                          percent = Fail_3.1[Fail_3.1  < 1] )
+
+Fail_Table_3.1 <- bind_cols(Fail_Dex_3.1, pred_ft_3.1[Fail_Dex_3.1$dex, ], 
+                            T2_ID[Fail_Dex_3.1$dex, ] ) %>% 
+  select(id, diagnosis, percent, everything() , -dex) %>% 
+  arrange(percent)
+
+
+names_fail_3.1 <- c("id", "diagnosis", "Percent", "adaboost_3.1", "avNNet_3.1", "gamboost_3.1", "gamLoess_3.1", "glm_3.1", 
+                    "gbm_3.1", "knn_3.1", "kknn_3.1", "lda_3.1", "mlp_3.1",  "monmlp_3.1", "naive_bayes_3.1", "qda_3.1", "ranger_3.1", 
+                    "Rborist_3.1", "rf_3.1", "rpart_3.1",  "svmLinear_3.1", "svmRadial_3.1",  "svmRadialCost_3.1", "svmRadialSigma_3.1") 
+
+
+names(Fail_Table_3.1)[1:24] <- names_fail_3.1
+
+
+
+
+# Prep_2 = nzv, center, scale, pca
+Fail_3.2 <- rowMeans2(predictions_3.2 == test2_id$diagnosis) 
+
+Fail_Dex_3.2 <- bind_cols(dex = which(Fail_3.2 < 1), 
+                          percent = Fail_3.2[Fail_3.2  < 1] )
+
+Fail_Table_3.2 <- bind_cols(Fail_Dex_3.2, pred_ft_3.2[Fail_Dex_3.2$dex, ], 
+                            T2_ID[Fail_Dex_3.2$dex, ] ) %>% 
+  select(id, diagnosis, percent, everything() , -dex) %>% 
+  arrange(percent)
+
+
+names_fail_3.2 <- c("id", "diagnosis", "Percent", "adaboost_3.2", "avNNet_3.2", "gamboost_3.2", "gamLoess_3.2", "glm_3.2", 
+                    "gbm_3.2", "knn_3.2", "kknn_3.2", "lda_3.2", "mlp_3.2",  "monmlp_3.2", "naive_bayes_3.2", "qda_3.2", "ranger_3.2", 
+                    "Rborist_3.2", "rf_3.2", "rpart_3.2",  "svmLinear_3.2", "svmRadial_3.2",  "svmRadialCost_3.2", "svmRadialSigma_3.2") 
+
+
+names(Fail_Table_3.2)[1:24] <- names_fail_3.2
+
+
+## Clean up environment
+rm(Fail_0, Fail_Dex_0, Fail_1, Fail_Dex_1, Fail_2, Fail_Dex_2,
+   Fail_3.0, Fail_Dex_3.0, Fail_3.1, Fail_Dex_3.1, Fail_3.2, Fail_Dex_3.2, 
+   names_fail_0, names_fail_1, names_fail_2, names_fail_3.0, names_fail_3.1, names_fail_3.2)
+
+
+
+
+###########  Fails Tables Per Entire Run, and Preps Across Runs  ####
+#### 50/50 Split Run : all preps 
+Common_Run_One <- intersect(Fail_Table_0$id, Fail_Table_1$id) %>% intersect(Fail_Table_2$id) 
+
+Common_One_Fail_Table <- bind_cols(Fail_Table_0 %>% filter(id %in% Common_Run_One),
+                                   Fail_Table_1 %>% filter(id %in% Common_Run_One),
+                                   Fail_Table_2 %>% filter(id %in% Common_Run_One)) %>%
+  select(everything(), -c(Percent, id1, diagnosis1, Percent1,id2, diagnosis2, Percent2) ) 
+
+Common_One_Fail_Table <- Common_One_Fail_Table %>% 
+  mutate(Percent = rowMeans(as.matrix(Common_One_Fail_Table[3:65]) == Common_One_Fail_Table$diagnosis)) %>%
+  select(id, diagnosis, Percent, everything() ) %>% arrange(Percent)
+
+
+#### 82/18 Split: all preps
+Common_Run_Two <- intersect(Fail_Table_3.0$id, Fail_Table_3.1$id) %>% intersect(Fail_Table_3.2$id) 
+
+Common_Two_Fail_Table <- bind_cols(Fail_Table_3.0 %>% filter(id %in% Common_Run_Two),
+                                   Fail_Table_3.1 %>% filter(id %in% Common_Run_Two),
+                                   Fail_Table_3.2 %>% filter(id %in% Common_Run_Two)) %>%
+  select(everything(), -c(Percent, id1, diagnosis1, Percent1,
+                          id2, diagnosis2, Percent2) ) 
+
+Common_Two_Fail_Table <- Common_Two_Fail_Table %>% 
+  mutate(Percent = rowMeans(as.matrix(Common_Two_Fail_Table[3:65]) == Common_Two_Fail_Table$diagnosis)) %>%
+  select(id, diagnosis, Percent, everything()  ) %>% arrange(Percent)
+
+# Prep = NULL
+Null_Run_Fails <- intersect(Fail_Table_0$id, Fail_Table_3.0$id)
+Prep_Null_Fail_Table <- bind_cols(Fail_Table_0 %>% filter(id %in% Null_Run_Fails  ),
+                                  Fail_Table_3.0 %>% filter(id %in% Null_Run_Fails ) ) %>%
+  select(everything(), -c(id1, diagnosis1) ) %>% 
+  mutate(Null_percent = (Percent + Percent1) / 2 ) %>%
+  select(id, diagnosis, Null_percent, everything(), -c(Percent, Percent1)  ) %>% 
+  arrange(Null_percent)
+
+
+# Prep_1 = center, scale
+Prep1_Run_Fails <- intersect(Fail_Table_1$id, Fail_Table_3.1$id)
+
+Prep1_Fail_Table <- bind_cols(Fail_Table_1 %>% filter(id %in% Prep1_Run_Fails),
+                              Fail_Table_3.1 %>% filter(id %in% Prep1_Run_Fails) ) %>%
+  select(everything(), -c(id1, diagnosis1) ) %>% 
+  mutate(Prep1_percent = (Percent + Percent1) / 2 ) %>%
+  select(id, diagnosis, Prep1_percent, everything(), -c(Percent, Percent1)  ) %>% 
+  arrange(Prep1_percent)
+
+
+
+# Prep_2 = nzv, center, scale, pca
+Prep2_Run_Fails <- intersect(Fail_Table_2$id, Fail_Table_3.2$id)
+
+Prep2_Fail_Table <- bind_cols(Fail_Table_2 %>% filter(id %in% Prep2_Run_Fails  ),
+                              Fail_Table_3.2 %>% filter(id %in% Prep2_Run_Fails  ) ) %>%
+  select(everything(), -c(id1, diagnosis1) ) %>% 
+  mutate(Prep2_percent = (Percent + Percent1) / 2 ) %>%
+  select(id, diagnosis, Prep2_percent, everything(), -c(Percent, Percent1)  ) %>% 
+  arrange(Prep2_percent)
+
+
+#####
+
+Overall_Run_Fails <- intersect(Common_Run_One , Common_Run_Two )
+
+Overall_Fail_Table_Long <- bind_cols(Common_One_Fail_Table %>% filter(id %in% Overall_Run_Fails ),
+                                     Common_Two_Fail_Table %>% filter(id %in% Overall_Run_Fails ))  %>% 
+  select(everything(), -c(Percent, id1,diagnosis1, Percent1)) 
+
+Overall_Fail_Table_Long <- Overall_Fail_Table_Long %>% 
+  mutate(Percent = rowMeans2(as.matrix(Overall_Fail_Table_Long[3:128]) == Overall_Fail_Table_Long$diagnosis)) %>% 
+  select(id, diagnosis, Percent, everything())
+
+names_vector_long <- c("id", "diagnosis", "Percent", "adaboost_0", "avNNet_0", "gamboost_0", "gamLoess_0", "glm_0", 
+                       "gbm_0", "knn_0", "kknn_0", "lda_0", "mlp_0",  "monmlp_0", "naive_bayes_0", "qda_0", "ranger_0", 
+                       "Rborist_0", "rf_0", "rpart_0",  "svmLinear_0", "svmRadial_0",  "svmRadialCost_0", "svmRadialSigma_0",   
+                       "adaboost_1", "avNNet_1", "gamboost_1", "gamLoess_1", "glm_1", "gbm_1", "knn_1",  "kknn_1", "lda_1", 
+                       "mlp_1",  "monmlp_1", "naive_bayes_1", "qda_1",  "ranger_1", "Rborist_1", "rf_1", "rpart_1" ,"svmLinear_1",
+                       "svmRadial_1", "svmRadialCost_1", "svmRadialSigma_1", "adaboost_2", "avNNet_2", "gamboost_2", "gamLoess_2",
+                       "glm_2", "gbm_2", "knn_2", "kknn_2", "lda_2", "mlp_2",  "monmlp_2", "naive_bayes_2", "qda_2", "ranger_2" , 
+                       "Rborist_2", "rf_2", "rpart_2", "svmLinear_2", "svmRadial_2",  "svmRadialCost_2", "svmRadialSigma_2", 
+                       "adaboost_3.0", "avNNet_3.0", "gamboost_3.0", "gamLoess_3.0", "glm_3.0", "gbm_3.0", "knn_3.0", "kknn_3.0", 
+                       "lda_3.0", "mlp_3.0", "monmlp_3.0", "naive_bayes_3.0", "qda_3.0", "ranger_3.0", "Rborist_3.0", "rf_3.0", 
+                       "rpart_3.0", "svmLinear_3.0", "svmRadial_3.0", "svmRadialCost_3.0", "svmRadialSigma_3.0", "adaboost_3.1", 
+                       "avNNet_3.1", "gamboost_3.1", "gamLoess_3.1", "glm_3.1", "gbm_3.1", "knn_3.1", "kknn_3.1", "lda_3.1",
+                       "mlp_3.1", "monmlp_3.1", "naive_bayes_3.1", "qda_3.1", "ranger_3.1", "Rborist_3.1", "rf_3.1", "rpart_3.1", 
+                       "svmLinear_3.1", "svmRadial_3.1", "svmRadialCost_3.1", "svmRadialSigma_3.1", "adaboost_3.2", "avNNet_3.2", 
+                       "gamboost_3.2", "gamLoess_3.2", "glm_3.2", "gbm_3.2", "knn_3.2", "kknn_3.2", "lda_3.2", "mlp_3.2", 
+                       "monmlp_3.2", "naive_bayes_3.2", "qda_3.2", "ranger_3.2", "Rborist_3.2", "rf_3.2", "rpart_3.2", 
+                       "svmLinear_3.2", "svmRadial_3.2", "svmRadialCost_3.2", "svmRadialSigma_3.2" ) 
+
+names(Overall_Fail_Table_Long)[1:129] <- names_vector_long
+
+
+# Data information
+Overall_Fail_Table_Short <- bind_cols(Common_One_Fail_Table %>% 
+                                        filter(id %in% Overall_Run_Fails ),
+                                      Common_Two_Fail_Table %>% 
+                                        filter(id %in% Overall_Run_Fails ) ) %>%
+  mutate(Percent = Overall_Fail_Table_Long$Percent ) %>%
+  select(id, Percent)  %>% left_join(wdbc_data, by = "id" ) %>% 
+  select(everything()) %>% 
+  arrange(Percent)
+
+
+## case Study GamLoes
+
+GamLoess_Run_One <-  All_Predictions_Run_One %>%
+  select(id,  diagnosis, starts_with("gamLoess"))
+
+GamLoess_Run_Two <-  All_Predictions_Run_Two %>%
+  select(id,  diagnosis, starts_with("gamLoess"))
+
+GamLoess_Fails_One <- GamLoess_Run_One %>% 
+  mutate(percent = rowMeans(as.matrix(GamLoess_Run_One[3:5]) == GamLoess_Run_One$diagnosis)) %>%
+  select(id, diagnosis, percent, everything() ) %>%
+  filter(percent < 1) %>%
+  arrange(percent)
+
+GamLoess_Fails_Two <- GamLoess_Run_Two %>% 
+  mutate(percent = rowMeans(as.matrix(GamLoess_Run_Two[3:5]) == GamLoess_Run_Two$diagnosis)) %>%
+  select(id, diagnosis, percent, everything() ) %>%
+  filter(percent < 1) %>%
+  arrange(percent)
+
+gamLoess_Accuracy_Table <- bind_cols(Accuracy_Table_1 %>% 
+                                      filter(Model == "gamLoess") %>% 
+                                      select(Model, starts_with("Acc")), 
+                                     Accuracy_Table_2 %>% 
+                                      filter(Model == "gamLoess") %>% 
+                                      select(starts_with("Acc")) )
+
+gamLoess_names <- names(gamLoess_Accuracy_Table)[2:7]
+
+by_Prep <- c("Fail Count") # create rowname_Colum
+gamLoess_failures_by_prep <- bind_cols(enframe(by_Prep, name = NULL, value = "Model"),
+                                       abs(round((gamLoess_Accuracy_Table[,2:4] * 285) - 285)), 
+                                       abs(round((gamLoess_Accuracy_Table[,5:7] * 104) - 104)) ) # do not re-run unless restarting
+
+```
+
+## Failure Tables
+Evaluating model performance as above should also encourage us to take a more detailed look at the data. Failure case here refers to a particular observation row as identifed by the unique ID number.
+
+The relevant questions are: Did the better performing models have similar or different failure cases?  Since no model performed perfectly, did all models fail on a certain case or set?  Did different preparations lead to common fail cases in modelling? Do high rate failure cases have certain features in common? In contrast, were some cases uncontroversial for all or mostly all models?  
+
+Finally, we can also use *Failure Tables* to track the performance of individual models in detail.
+
+The variable `Percent` in the tables below refers on a scale of 0 to 1, with 1 as 100% of the number of correct predictions per case.  So an observation with a score of 0.5 would mean that 50% of the models got it right; 0, 0%; and 1, 100%.
+
+### Overall Results
+For Run One, the 50/50 train/test split, running `mean(All_Predictions_Run_One$Percent == 1)` results in `0.477193`: 48% of the observations were uncontroversial.  All models correctly classified these cases according to their true value diagnosis. We could examine these cases in more detail to understand why, and perhaps even remove the majority of them for the purposes of future modelling.
+
+For Run Two, the 82/18 train/test split, `mean(All_Predictions_Run_Two$Percent == 1)` results in `0.5480769` or 55%, which suggests that several of the models have learned from expanded training data.
+
+By combining the total number of such cases by ID number, and running `table(Obvious_Cases$diagnosis)` we find that there are 168 unproblematic cases total: all of them class "B" or dianogsis benign.  
+
+We can also isolate the most problematic cases.  Below, the first eight most problematic cases for Run One and Run Two.
+
+```{r Overall_Fails}
+Common_One_Fail_Table[,1:8] %>% head(8) %>%  
+  knitr::kable(caption = "50/50 Split: Failures Common to All Preps: First 8 rows/cols" )
+
+Common_Two_Fail_Table[,1:8] %>% head(8) %>%  
+  knitr::kable(caption = "82/18 Split: Failures Common to All Preps: First 8 rows/cols" )
+
+```
+
+(In the above tables, only the first 6 model results for Prep_0 are shown. 115 more model results are included in the entire table).
+
+Since the both test sets as randomly generated by `caret` share some common cases, it should not surprise us that we have common failures to all run and preps, with one failure case common to all models:
+
+```{r Overall_Fails_2}
+# Example
+Overall_Fail_Table_Long[ , 1:8 ] %>% 
+  knitr::kable(caption = "The 8 Failures Common to All Runs-Prep Combinations")
+
+```
+
+#### Data Details for Common Failure Cases
+We can examine the data itself in more detail to understand why it was so difficult to diagnose correctly:
+
+```{r Overall_Fail_Table_Short}
+Overall_Fail_Table_Short$Percent <- round(Overall_Fail_Table_Short$Percent, 4 )
+Overall_Fail_Table_Short$smoothness_mean <- round(Overall_Fail_Table_Short$smoothness_mean, 4 )
+Overall_Fail_Table_Short[, 1:8] %>% 
+  knitr::kable(caption = "Common Failures: Data Details [First 5 Vars]")
+```
+
+Importantly, 6 of 8 failure cases, including the 4 with the highest rate of incorrect classifications, were malignant cells mistakenly identified as benign. 
+
+### Failures Shared Across Data Preps
+We can also examine the failure cases for each type of prep, as the three tables below show:
+
+```{r Prep_Fails}
+
+Prep_Null_Fail_Table[,1:8] %>% head(8) %>%  
+  knitr::kable(caption = "Null Prep Fails: Both Splits: First 8 rows/cols" )
+
+Prep1_Fail_Table[,1:8] %>% head(8) %>%  
+  knitr::kable(caption = "Prep_1 Fails: Both Splits: First 8 rows/cols" )
+
+Prep2_Fail_Table[,1:8] %>% head(8) %>%  
+  knitr::kable(caption = "Prep_2 Fails: Both Splits: First 8 rows/cols" )
+```
+
+
+A cursory examination of these tables strongly suggests the case data itself, and not the preprocessing or lack thereof, largely determined the failure rate.
+
+Finally, we can also drill down in detail on the performance of any given model or models.  Since `gamLoess` provided the highest overall accuracy score, and emerged as one of the best learning models, we will use it as a case study.
+
+### gamLoess Failure Details
+```{r gamLoess_fails }
+bind_rows(gamLoess_Accuracy_Table, gamLoess_failures_by_prep) %>% 
+  rename( "gamLoess" = "Model") %>%
+  knitr::kable(caption = "gamLoess Accuracy  & Fail Counts by Prep")
+
+GamLoess_Fails_One %>% head(8) %>% 
+  knitr::kable(caption = "gamLoess Fails: Run One: [First 8]")
+
+GamLoess_Fails_Two %>% head(8) %>% 
+  knitr::kable(caption = "gamLoess Fails: Run Two: [3 total]")
+
+```
+
+As we saw earlier, `gamLoess` learns well -- and likewise clearly benefits from data preprocessing using a standard *PCA* stack. In the final run/prep, for which it returned the highest overall accuracy score, it failed only on the case that every other model for all runs/preps failed on: `id 892189`.
+
+Someone with expert knowledge could better explain why this cell, with a true value diagnosis as "M" or malignant, passed for "B" or benign in every classification test thus far.
+
+In general terms, using the data details to better understand model failure can help us to improve existing models,  or to develop new models that better deal with highly problematic cases.
+
+
+# Conclusion
+Insofar as this project has resulted in any clear findings or recommendations, they are the following three: 
+
+1. Do extensive testing and development, including different data splits and preprocessing routines, before deciding upon a final model or approach.
+
+2. Define your project goals before modelling: based on your data and desired outcomes, determine what would count as good result. Then benchmark accordingly.
+
+3. Save your results data, and not just key scores or values. It provides insight to what worked and why, and as to what failed and why.  If the ML project is worth doing in the first place, at some point it will likely be revisited for possible improvement.
+
+Why these three? 
+
+Judging from what I read on [*Medium: Towards Data Science*](https://towardsdatascience.com/)[^26] and elsewhere, the trend right now is to use the most popular advanced approaches, with the assumption that the *neural network* or *nonparametric* alogrithim *de jour* with the right combination of *PCA* or other sophisticated data transformations will magically solve the problems for you.  
+
+Alternatively, and equally fashionable, just run [`Keras`](https://keras.io/) on a cloud account even if you have no idea otherwise what you are doing. My favorites are the bloggers who brag about being data scientists without having to understand basic statistics. 
+
+That notwithstanding, as the above experiment has shown, depending upon the data and test conditions, advanced models do not always deliver the best results, and not every model requires or even benefits from *PCA*.
+
+Moreover, if I had went with the early best results, I would have eliminated some of the top performing models -- the *best learners* -- once the training data increased in size.
+
+Only by experimenting, with goals in mind, was I able to identify the better ensemble models for this task of `twoClassSummary` classification.
+
+One of the 20th century's greatest computer scientists, [Donald Knuth](https://en.wikipedia.org/wiki/Donald_Knuth)[^27], once infamously warned a fellow computer scientist in a letter:
+
+<blockquote>“Beware of bugs in the above code; I have only proved it correct, not tried it.”</blockquote>   
+
+Many of us currently doing ML seem to have the opposite dilemma: the code is bug-free, runs fine and fast, but that proves neither it nor the results correct for the task at hand. 
+
+Know the data. 
+
+Even if informally, consider some form of **Preregistration**:[^28] "When you preregister your research, you're simply specifying to your plan in advance. ... Preregistration separates hypothesis-generating (exploratory) from hypothesis-testing (confirmatory) research." 
+
+Instead of *p-hacking*[^29], ensemble ML makes it very easy to engage in model-hacking: that is, grab the first or most impressive result from the ensemble and call it a day. But our longer term goals include better results on the next set of related data. So it might help not to quit too early even when it looks like success. Finding the failure curve, after the law of diminishing returns sets in, helps us better identify the area of success. 
+
+## Models
+The *Support-vector machine* family of models for `caret`, the `svm~` group, turned in an impressive overall performance.
+
+The more advanced *neural network* and *Generalized additive models* also did well, particularly when the training data size was increased, and the data preprocessed.  These models would likely scale well.
+
+For this data set, the *random forest* models in general did not do as well; and other current favorites (rightfully so), such as `naive_bayes` and `rpart` also underperformed.  But again, fine-tuning the parameters for these models would have likely improved performance.
+
+Finally, for model development and evaluation purposes, the well-established `glm` and `knn` remain baseline performance standards for good reasons. Run these, and then try to do better.
+
+## Data Preprocessing
+The overall results are mixed, but some models benefit significantly from basic data preprocessing such as centering and scaling (`prep_1`), and one  model tested, `mlp`, required it. The models that worked well on the raw data (`prep_0`) also generally worked equally well or better on centered and scaled data (`prep_1`).  So it seems there is little risk, but possible to considerable reward in centering and scaling the data.
+
+Please note however that *random forest* models typically do not require data preprocessing -- but also that the *random forest* models generally underperformed for this particular data set and classification task.
+
+In theory and often enough in practice, *Principal Component Analysis* (PCA) yields huge benefits for data sets suffering from the "curse of dimensonality". But rather than assuming *PCA* will always bring about a better result, one should do a controlled experiment during the modelling testing and development stage.  For this data set, the results from using *PCA* were mixed.
+
+
+## Failure Cases
+The problem could be with the data. Mistakes get made. Even if not, the question as to why some cases are invariably diagnosed incorrectly is an interesting one. But unless we can pinpoint particular observations and their effects on models, we'll never know.   
+
+As stated earlier, even the most advanced current ML project could likely be improved upon in the near or intermediate future. By capturing the failure cases, we can use the data details to better understand existing model failure. This can help us to develop better models, which when used for analyzing medical data could prove life-saving.
+
+
+```{r footnotes, echo = TRUE}
+# Capstone Project Two: 21 models tested on the WDBC data
+# Submitted on 2019-03-12, by Thomas J. Haslam
+# In partial fulfillment of the requirements for the Harvard edX: 
+#    Data Science Professional Certificate
+```
+
+
+[^1]: WDBC data set available from <https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Diagnostic)>; main UCI Machine Learning Repository site @ <http://archive.ics.uci.edu/ml/index.php>
+
+[^2]: "Tidy data", *R for Data Science*, Wickham and Grolemund (2017) @ <https://r4ds.had.co.nz/tidy-data.html>
+
+[^3]: Infomation about data set from "Wisconsin Diagnostic Breast Cancer (WDBC)" @ <https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.names>
+
+[^4]: "F Measure" (redirects to "F1 score"), *Wikipedia* @ <https://en.wikipedia.org/wiki/F1_score>
+
+[^5]: Lesson 4, "Preprocessing your data", in *Machine Learning Toolbox*, Kuhn and Deane-Mayer (2018) @ <https://www.datacamp.com/courses/machine-learning-toolbox>
+
+[^6]: "trainControl", *RDocumentation* @ <https://www.rdocumentation.org/packages/caret/versions/6.0-81/topics/trainControl>
+
+[^7]: "Supervised learning", *Wikipedia* @ <https://en.wikipedia.org/wiki/Supervised_learning>
+
+[^8]: "Unsupervised learning", *Wikipedia* @
+<https://en.wikipedia.org/wiki/Unsupervised_learning>
+
+[^9]: "Unsupervised Learning in R", Roark (2018) @ <https://www.datacamp.com/courses/unsupervised-learning-in-r>
+
+[^10]: "34.5 Ensembles", *Introduction to Data Science*, Irizarry, et al (2018) @  <https://rafalab.github.io/dsbook/machine-learning-in-practice.html#ensembles>
+
+[^11]: "Generalized Additive Model", *Wikipedia* @
+<https://en.wikipedia.org/wiki/Generalized_additive_model>
+
+[^12]: "wsrf: Weighted Subspace Random Forest for Classification", *CRAN* @ <https://cran.r-project.org/web/packages/wsrf/index.html>
+
+[^13]: "Random Forests", *UC Business Analytics R Programming Guide* @ <https://uc-r.github.io/random_forests>
+
+[^14]: "Curse of dimensionality", *Wikipedia* @
+<https://en.wikipedia.org/wiki/Curse_of_dimensionality>
+
+[^15]: "Principal component analysis", *Wikipedia* @
+<https://en.wikipedia.org/wiki/Principal_component_analysis>
+
+[^16]: "Is there a rule-of-thumb for how to divide a dataset into training and validation sets?", *StackOverFlow* (Kiril: answered November 28, 2012) @   <https://stackoverflow.com/questions/13610074/is-there-a-rule-of-thumb-for-how-to-divide-a-dataset-into-training-and-validatio/13612921#13612921>
+
+[^17]: "mlp: Create and train a multi-layer perceptron (MLP)", *CRAN: RSNNS* @ <https://rdrr.io/cran/RSNNS/man/mlp.html>
+
+[^18]: "Support-vector machine", *Wikipedia* @ <https://en.wikipedia.org/wiki/Support-vector_machine>
+
+[^19]: "models: A List of Available Models in train", *CRAN: caret* @ <https://rdrr.io/cran/caret/man/models.html>
+
+[^20]: "avNNet: Neural Networks Using Model Averaging", *RDocumentation* @
+<https://www.rdocumentation.org/packages/caret/versions/6.0-81/topics/avNNet>
+
+[^21]: "monmlp: Multi-Layer Perceptron Neural Network with Optional Monotonicity Constraints", *CRAN: monmlp* @ <https://rdrr.io/cran/monmlp/>
+
+[^22]: "Gradient boosting", *Wikipedia* @ <https://en.wikipedia.org/wiki/Gradient_boosting>
+
+[^23]: "Adaboost", *Wikipedia* @ <https://en.wikipedia.org/wiki/AdaBoost>
+
+[^24]: "LOESS" (redirects to "Local regression"), *Wikipedia* @ <https://en.wikipedia.org/wiki/Local_regression>
+
+[^25]: "Generalized Linear Model", *Wikipedia* @ <https://en.wikipedia.org/wiki/Generalized_linear_model>
+
+[^26]: *Medium: Toward Data Science* @ <https://towardsdatascience.com/>
+
+[^27]: "Donald Knuth", *Wikipedia* @ <https://en.wikipedia.org/wiki/Donald_Knuth>
+
+[^28]: "What is Preregistration?", *Center for Open Science* @ <https://cos.io/prereg/>
+
+[^29]: "P-hacking", *Psychology Wiki* @ <http://psychology.wikia.com/wiki/P-hacking>
