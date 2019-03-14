@@ -2,7 +2,7 @@
 
 In partial fulfillment of the requirements for the [Harvard edX: Data Science Professional Certificate](https://www.edx.org/professional-certificate/harvardx-data-science), this repository contains the following files:
 * [R Markdown](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Report_Haslam_2019_03_12.Rmd): Capstone_Two_Report_Haslam_2019_03_12.Rmd
-* [Capstone_Two_Script.r](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Script.r)
+* [R_Script](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Script.r): Capstone_Two_Script.r 
 * [Report in PDF](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Report_Haslam_2019_03_12.pdf):  Capstone_Two_Report_Haslam_2019_03_12.pdf
 * Capstone_Two_Report_Haslam_2019_03_12.html 
 
