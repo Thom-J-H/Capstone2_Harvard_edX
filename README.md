@@ -3,7 +3,7 @@
 In partial fulfillment of the requirements for the [Harvard edX: Data Science Professional Certificate](https://www.edx.org/professional-certificate/harvardx-data-science), this repository contains the following files:
 * Capstone_Two_Report_Haslam_2019_03_12.Rmd
 * Capstone_Two_Script.r
-* Capstone_Two_Report_Haslam_2019_03_12.pdf
+* Capstone_Two_Report_Haslam_2019_03_12.pdf: [The Report](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Report_Haslam_2019_03_12.pdf)
 * Capstone_Two_Report_Haslam_2019_03_12.html
 
 And the original [Breast Cancer Wisconsin (Diagnostic) data set (WDBC)](https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Diagnostic)), available from the [UCI Machine Learning Repository](http://archive.ics.uci.edu/ml/index.php), Center for Machine Learning and Intelligent Systems, University of California, Irvine:
