@@ -12,6 +12,8 @@ And the original [Breast Cancer Wisconsin (Diagnostic) data set (WDBC)](https://
   
 The script (and RMD) import the data set from the UCI source, so there is no need to download it first.
 
+![Run Two: Visual Overview](https://raw.githubusercontent.com/Thom-J-H/Capstone2_Harvard_edX/master/PCA_graph.png)
+
 **Please note:** <br />
 The RMD will take a minimum of 40 minutes -- and more likely over an hour -- to run.  It also requires that the user has installed a number of ML packages for R, consistent with those used in for [ensemble modelling in the Harvard edX course](https://rafalab.github.io/dsbook/machine-learning-in-practice.html#ensembles) on Machine Learning.  The script largely runs silently (the output captured).  Any warnings or error messages may be safely ignored.  Not every model works perfectly on each testing condition/variation, which is the point of testing the various models against similar controlled conditions.
 
