@@ -1,14 +1,14 @@
 # Capstone2_Harvard_edX
 
 In partial fulfillment of the requirements for the [Harvard edX: Data Science Professional Certificate](https://www.edx.org/professional-certificate/harvardx-data-science), this repository contains the following files:
-* [R Markdown](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Report_Haslam_2019_03_12.Rmd): Capstone_Two_Report_Haslam_2019_03_12.Rmd
-* [R_Script](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Script.r): Capstone_Two_Script.r 
-* [Report in PDF](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Report_Haslam_2019_03_12.pdf):  Capstone_Two_Report_Haslam_2019_03_12.pdf
-* Capstone_Two_Report_Haslam_2019_03_12.html 
+* R Markdown: [Capstone_Two_Report_Haslam_2019_03_12.Rmd](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Report_Haslam_2019_03_12.Rmd): 
+* R_Script: [Capstone_Two_Script.r](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Script.r):  
+* Report in PDF: [Capstone_Two_Report_Haslam_2019_03_12.pdf](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/Capstone_Two_Report_Haslam_2019_03_12.pdf):  
+* Extra: Capstone_Two_Report_Haslam_2019_03_12.html 
 
 And the original [Breast Cancer Wisconsin (Diagnostic) data set (WDBC)](https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Diagnostic)), available from the [UCI Machine Learning Repository](http://archive.ics.uci.edu/ml/index.php), Center for Machine Learning and Intelligent Systems, University of California, Irvine:
-* wdbc.data.csv
-* wdbc.names.txt
+* [wdbc.data.csv](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/wdbc.data.csv)
+* [wdbc.names.txt](https://github.com/Thom-J-H/Capstone2_Harvard_edX/blob/master/wdbc.names.txt)
   
 The script (and RMD) import the data set from the UCI source, so there is no need to download it first.
 
