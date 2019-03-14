@@ -16,13 +16,20 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.fullwi
 This project uses the well-known Breast Cancer Wisconsin (Diagnostic) Data Set ([WDBC](https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+(Diagnostic))), available from the [UCI Machine Learning Repository](http://archive.ics.uci.edu/ml/index.php), Center for Machine Learning and Intelligent Systems, University of California, Irvine.[^1] 
 ```{r lib_data}
 library(tidyverse)
-library(caret)
-library(readr)
-library(matrixStats)
-options(scipen = 999)
-
-library(cluster)
-library(fpc)
+# For RMD use this instead of standard library()
+if (!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if (!require(caret)) install.packages("caret",  repos = "http://cran.us.r-project.org")
+if (!require(matrixStats)) install.packages("matrixStats", repos = "http://cran.us.r-project.org")
+if (!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+if (!require(cluster)) install.packages("cluster",  repos = "http://cran.us.r-project.org")
+if (!require(fpc)) install.packages("fpc", repos = "http://cran.us.r-project.org")
+if (!require(utils)) install.packages("utils", repos = "http://cran.us.r-project.org")
+#library(tidyverse)
+#library(caret)
+#library(readr)
+#library(matrixStats)
+#library(utils)
+options(scipen = 999) # no natural log, please
 ```
 
 ## Data Set Characteristics  
@@ -1093,7 +1100,7 @@ Top_Seven_82_Split %>%
   knitr::kable(caption = "Run Two: Mean Accuracy by Prep for Top Seven Models")
 ```
 
-Likewise, the best overall score does belong to `gamLoess` using `prep_2` *PCA*.  So the case for data preprocessing is not conclusive, given the data set under consideration, but some models (such as`mlp`) clearly either require or benefit strongly (`gamLoess`, `adaboost`) from data preprocessing.
+Likewise, the best overall score does belong to `gamLoess` using `prep_2` *PCA*.  So the case for data preprocessing is not conclusive, given the data set under consideration, but some models (e.g., `mlp`) clearly either require or benefit strongly (e.g., `gamLoess` , `adaboost`) from data preprocessing.
 
 ### Run Two: Summary Table
 The table for the top seven per prep as follows:
@@ -1513,6 +1520,7 @@ Finally, we can also drill down in detail on the performance of any given model 
 
 ### gamLoess Failure Details
 ```{r gamLoess_fails }
+gamLoess_Accuracy_Table[1,1] <- "Accuracy" # for RMD, see next
 bind_rows(gamLoess_Accuracy_Table, gamLoess_failures_by_prep) %>% 
   rename( "gamLoess" = "Model") %>%
   knitr::kable(caption = "gamLoess Accuracy  & Fail Counts by Prep")
@@ -1587,6 +1595,8 @@ The problem could be with the data. Mistakes get made. Even if not, the question
 
 As stated earlier, even the most advanced current ML project could likely be improved upon in the near or intermediate future. By capturing the failure cases, we can use the data details to better understand existing model failure. This can help us to develop better models, which when used for analyzing medical data could prove life-saving.
 
+# Sources, References, and Inspiration
+For all URLs listed in text or in notes, please assume the retrieval dates range from 2019-03-01 to 2019-03-12. As we all know, web-based content can change quickly or even vanish. All links were re-tested before the final version of the this report was submitted. Thank you.
 
 ```{r footnotes, echo = TRUE}
 # Capstone Project Two: 21 models tested on the WDBC data
