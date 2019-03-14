@@ -34,7 +34,7 @@ To
 
 Which will ensure that if someone is missing the needed packages, the packages will be installed from CRAN so that the RMD runs without terminating by error.
 
-This is an excellent suggestion, so I will update the script and the RMD (by 15 March 2019) for future use/reference.  I will also take one last crack at fixing any typos or infelcities of expression in the report, even though the project has received **full marks** (50 out of 50) and for all practical purpose is done: [certificate earned!](https://courses.edx.org/certificates/670fdf3fe3e948f890134889fa55676d)
+This is an excellent suggestion, so I will update the script and the RMD (by 15 March 2019) for future use/reference.  I will also take one last crack at fixing any typos or infelicities of expression in the report, even though the project has received **full marks** (50 out of 50) and for all practical purpose is done: [certificate earned!](https://courses.edx.org/certificates/670fdf3fe3e948f890134889fa55676d)
 
 Otherwise, I will leave this Machine Learning project up as an archive: as part of what I hope will be a growing *R for Data Science* portfolio.
 
