@@ -1,4 +1,19 @@
 # Capstone2_Harvard_edX
+
+## Update: 2019-03-14
+I thank the Harvard edX peer and staff reviewers for their encouraging and helpful comments.  One suggestion was to change the loading procedure in the RMD from
+* library(tidyverse)
+* library(caret) # etc
+To 
+* if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+* if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org") # etc
+Which will ensure that if someone is missing the needed packages, the packages will be installed from CRAN so that the RMD runs without terminating by error.
+
+This is an excellent suggestion, so I will update the script and the RMD (by 15 March 2019) for future use/reference.  I will also take one last crack at fixing any typos or infelcities of expression in the report, even though the project has received full marks and for all practical purposes is done.  Otherwise, I will leave the Machine Learning project up now as an archive as part of what I hope will be a growing *R for Data Science* portfolio.
+
+
+
+## Original
 In partial fulfillment of the requirements for the [Harvard edX: Data Science Professional Certificate](https://www.edx.org/professional-certificate/harvardx-data-science), this repository contains the following files:
 * Capstone_Two_Report_Haslam_2019_03_12.Rmd
 * Capstone_Two_Script.r
@@ -17,4 +32,6 @@ The RMD will take a minimum of 40 minutes -- and more likely over an hour -- to 
 Thank you,<br />
 Thom J. Haslam<br />
 March 12, 2019
+
+
 
