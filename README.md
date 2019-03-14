@@ -19,6 +19,7 @@ Thank you,<br />
 Thom J. Haslam<br />
 March 12, 2019
 
+&nbsp; <br />
 ![Run Two: Visual Overview](https://raw.githubusercontent.com/Thom-J-H/Capstone2_Harvard_edX/master/Run_two_graph.png)
 
 ## Update: 2019-03-14
