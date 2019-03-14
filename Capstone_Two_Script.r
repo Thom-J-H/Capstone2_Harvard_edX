@@ -1,13 +1,40 @@
+# Capstone Project Two: 21 models tested on the WDBC data
+# R Script: All Code in RMD and more
+# Submitted on 2019-03-12, by Thomas J. Haslam
+# In partial fulfillment of the requirements for the Harvard edX: 
+#    Data Science Professional Certificate
+
+# Revised (after graded) on 2019-03-14, based on peer-review suggestions.
+# Thank you, reviewers.
+
+
 # Data Wrangle_EDA_Prep
 ## Libraries
-library(tidyverse)
-library(caret)
-library(readr)
-library(matrixStats)
-library(utils)
-options(scipen = 999)
 
+# For RMD use this instead of standard library()
+if (!require(tidyverse)) install.packages("tidyverse", 
+                                         repos = "http://cran.us.r-project.org")
+if (!require(caret)) install.packages("caret", 
+                                      repos = "http://cran.us.r-project.org")
+if (!require(matrixStats)) install.packages("matrixStats", 
+                                            repos = "http://cran.us.r-project.org")
+if (!require(readr)) install.packages("readr", 
+                                      repos = "http://cran.us.r-project.org")
+if (!require(cluster)) install.packages("cluster", 
+                                        repos = "http://cran.us.r-project.org")
+if (!require(fpc)) install.packages("fpc", 
+                                    repos = "http://cran.us.r-project.org")
+if (!require(utils)) install.packages("utils", 
+                                      repos = "http://cran.us.r-project.org")
+#library(tidyverse)
+#library(caret)
+#library(readr)
+#library(matrixStats)
+#library(utils)
 
+options(scipen = 999) # no natural log, please
+
+ 
 skim_glim <- function(df) {
   tibble::glimpse(df)
   skimr::skim(df)
@@ -57,7 +84,7 @@ skim_glim(wdbc_data) # Quick EDA overview
 # ML  EDA, using old school and Tidyverse methods
 #
 
-table(wdbc_data$diagnosis) # check distribution
+table(wdbc_data$diagnosis) #check distribution: confirm M/B ratio 212/357
 
 # Convert wdbc_data  to matrix
 wdbc_mx <- as.matrix(wdbc_data[, 3:32]) # remove id & diagnosis
@@ -103,14 +130,12 @@ tidy_2 %>%
 ####################
 # Explore centering and scaling data
 
-table(wdbc_data$diagnosis) # We know that we have   B   M  357 212.
-
 true_values <-  as.factor(wdbc_data$diagnosis) %>% 
   relevel("M") %>% set_names(wdbc_data$id) # Set malignant as POSITIVE
 
 #check for `id` match
 head(true_values)
-t(wdbc_mx[1:6, 1:2])
+t(wdbc_mx[1:6, 1:2]) # all good
 
 
 ##
@@ -124,7 +149,7 @@ library(fpc)
 # Unscaled
 set.seed(2019)
 unscaled_K <- kmeans(wdbc_mx, centers = 2, nstart = 20)
-table(unscaled_K$cluster)
+table(unscaled_K$cluster) #also unscaled_K$size
 # Viz
 plotcluster(wdbc_mx, unscaled_K$cluster, main = "Unscaled K Results",
             ylab = "", xlab = "Cluster 1: 131 assigned; Cluster 2: 438")
@@ -133,7 +158,7 @@ plotcluster(wdbc_mx, unscaled_K$cluster, main = "Unscaled K Results",
 wdbc_mx_sc <- scale(sweep(wdbc_mx, 2, colMeans(wdbc_mx))) # center & scale
 set.seed(2019)
 scaled_K <- kmeans(wdbc_mx_sc, centers = 2, nstart = 20)
-table(scaled_K$cluster)
+table(scaled_K$cluster) #also scaled_K$size
 # Viz
 plotcluster(wdbc_mx, scaled_K$cluster, 
             main = "Centered & Scaled K Results",
@@ -160,23 +185,17 @@ ID_check <- rbind(
   rbind("True_Values" = true_values[90:97]), 
   rbind("Unscaled_K" = unscaled_k_pred[90:97]),
   rbind("Scaled_K" = scaled_k_pred[90:97])  
-  ) 
+  ) # for RMD
 
-#rbind(true_values[90:97]) %>% as.data.frame() %>% names()
-#rbind(unscaled_k_pred[90:97]) %>% as.data.frame() %>% names()
-#rbind(scaled_k_pred[90:97]) %>% as.data.frame() %>% names() 
-
-#rbind(true_values[90:97]) %>% as.data.frame() %>% 
- # knitr::kable(caption = "true_values[90:97]" )
 
 ID_check %>% 
   knitr::kable(caption = "IDs and Indexs Match: sample[90:97]" )
 
 ## Confusion Matrix Test
 cfm_unscaled_k <- confusionMatrix(unscaled_k_pred, true_values)
-cfm_unscaled_k
+cfm_unscaled_k #check in console -- not raw print to RMD
 cfm_scaled_k  <- confusionMatrix(scaled_k_pred, true_values)
-cfm_scaled_k 
+cfm_scaled_k #check
 
 # key values as table output
 key_values_K_cluster <- bind_cols( 
@@ -186,7 +205,7 @@ key_values_K_cluster <- bind_cols(
   enframe(cfm_scaled_k$byClass["F1"], name = NULL, value = "scalK_F1" ) ) %>%  
   knitr::kable(caption = "Unscaled and Scaled K: Accuracy and F Measure results")
 
-key_values_K_cluster 
+key_values_K_cluster # print out in RMD
 
 # quick and dirty comp table
 dirty_comp_table <- cbind(cbind(TrV = table(true_values)), 
@@ -194,9 +213,9 @@ dirty_comp_table <- cbind(cbind(TrV = table(true_values)),
       cfm_scaled_k$table) %>% 
   knitr::kable(caption = "L-R: True Values, Unscaled K, Scaled K" )
 
-dirty_comp_table
+dirty_comp_table #print out
 
-# Raw vs. C-S
+# Raw vs. C-S: Clear example of preprocessing effect
 t(wdbc_mx)[1:8, 1:5] %>% 
   as.data.frame() %>% 
   rownames_to_column("Variable") %>%  
@@ -228,7 +247,7 @@ PCA_sum <- summary(wdbc_PCA) # PCA list: SD, Prop Var., Cum Prop.
 # PCA_sum$importance[3,] == summary(wdbc_PCA)$importance[3,]
 
 
-biplot(wdbc_PCA, cex = 0.45)
+biplot(wdbc_PCA, cex = 0.45) # explain in RMD
 
 
 plot_PCA1_2 <- data.frame(PC1 = wdbc_PCA$x[,1], PC2 = wdbc_PCA$x[,2],
@@ -237,7 +256,7 @@ plot_PCA1_2 <- data.frame(PC1 = wdbc_PCA$x[,1], PC2 = wdbc_PCA$x[,2],
   geom_point(cex = 3, pch = 21) +
   labs(fill = "Class", title = "True Value Groupings: PC1 / PC2",
        subtitle = "63% of variance explained") + 
-  theme(legend.position = c(0.88, 0.14))
+  theme(legend.position = c(0.88, 0.14)) # inside graph blank area
 
 
 plot_PCA4_5 <- data.frame(PC4 = wdbc_PCA$x[,4], PC5 = wdbc_PCA$x[,5],
@@ -246,7 +265,7 @@ plot_PCA4_5 <- data.frame(PC4 = wdbc_PCA$x[,4], PC5 = wdbc_PCA$x[,5],
   geom_point(cex = 3, pch = 21) +
   labs(fill = "Class", title = "True Value Groupings: PC4 / PC5",
        subtitle = "12% of variance explained") + 
-  theme(legend.position = c(0.88, 0.14))
+  theme(legend.position = c(0.88, 0.14)) # as plot_PCA1_2
 
 #########
 # http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
@@ -314,8 +333,10 @@ graph_PCA <- importance_df[1:12, ] %>%
   geom_hline(aes(yintercept = 0.95), color = "orange", linetype = 2)
 
 graph_PCA 
-## Strong case for PCA; none for nzv, but include as formality
 nearZeroVar(wdbc_data[, 3:32])
+## Strong case for PCA; not so for nzv, but include as formality
+# standard stack: nzv, center, scale, pca OR zv, center, scale, pca
+
 
 #
 #  END EDA  on to modelling
@@ -404,7 +425,11 @@ garbage_0 <- capture.output(
   train(diagnosis ~ ., data = train_set,  method = model,
         trControl = myControl, preProcess = prep_0)
 }) 
-)
+) # NOTE: this will capture the usual console output for train
+# to see train at work REMOVE the function capture.output()
+# but for the RMD report, this would result in over 800 pages!
+# setting "verbose = FALSE" or "trace = FALSE" will NOT work --
+# these options are only supported by some models, will crash others
 
 names(fits_0) <- models
 
@@ -598,10 +623,6 @@ CFM_3.1_Keys <- bind_cols(mod_names,
 
 CFM_3.1_Keys %>% arrange(desc(Total)) %>% head(n = 7) %>% 
   knitr::kable(caption = "Run Two: Prep_1: Top Seven Models" )
-
-#rm(CFM_mess_3.1)  ## Clean up the mess
-#rm(predictions_3.1)
-##
 
 #  
 ##  Prep_2 model nzv, center, scale, pca
@@ -1248,15 +1269,16 @@ gamLoess_names <- names(gamLoess_Accuracy_Table)[2:7]
 by_Prep <- c("Fail Count") # create rowname_Colum
 gamLoess_failures_by_prep <- bind_cols(enframe(by_Prep, name = NULL, value = "Model"),
                                        abs(round((gamLoess_Accuracy_Table[,2:4] * 285) - 285)), 
-                                       abs(round((gamLoess_Accuracy_Table[,5:7] * 104) - 104)) ) # do not re-run unless restarting
+                                       abs(round((gamLoess_Accuracy_Table[,5:7] * 104) - 104)) 
+									   ) # do not re-run unless restarting
 
 gamLoess_failures_by_prep %>% 
   knitr::kable(caption = "gamLoess Failure Count by Prep")
 
-gamLoess_Accuracy_Table[1,1] <- "Accuracy"
-
+# lead the gamLoess example with this
+gamLoess_Accuracy_Table[1,1] <- "Accuracy" # for RMD, see next
 bind_rows(gamLoess_Accuracy_Table, gamLoess_failures_by_prep) %>% 
   rename( "gamLoess" = "Model") %>%
-  knitr::kable(caption = "gamLoess Accuracy  & Fail Counts by Prep")
+  knitr::kable(caption = "gamLoess Accuracy  & Fail Counts by Prep") 
 
 
