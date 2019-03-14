@@ -38,6 +38,7 @@ This is an excellent suggestion, so I will update the script and the RMD (by 15 
 
 Otherwise, I will leave this Machine Learning project up as an archive: as part of what I hope will be a growing *R for Data Science* portfolio.
 
+&nbsp; <br />
 ![PCA Graphs 1-2, 4-5](https://raw.githubusercontent.com/Thom-J-H/Capstone2_Harvard_edX/master/PCA_graph.png)
 
 
